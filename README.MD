@@ -1,5 +1,5 @@
 # Domonap Home Assistant Integration
-
+Код взял у - https://github.com/svmironov/domonap_intercom 
 ![Logo](https://github.com/svmironov/domonap_intercom/blob/main/img/icon.png?raw=true)
 
 Интеграция позволяет управлять устройствами, привязанными к приложению **Domonap** (альтернативный провайдер домофона в домах ПИК) из **Home Assistant**.
