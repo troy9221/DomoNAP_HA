@@ -1,0 +1,11 @@
+{
+  "domain": "domonap",
+  "name": "Domonap",
+  "documentation": "https://github.com/svmironov/domonap_intercom",
+  "issue_tracker": "https://github.com/svmironov/domonap_intercom/issues",
+  "codeowners": ["@svmironov", "@krassalexs"],
+  "requirements": ["transliterate", "aiohttp>=3.9.3"],
+  "iot_class": "cloud_push",
+  "config_flow": true,
+  "version": "1.3.7"
+}

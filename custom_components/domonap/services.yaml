@@ -1,0 +1,51 @@
+open_relay_by_door_id:
+  name: Open relay by door id
+  description: Opens the intercom relay using a Domonap doorId.
+  fields:
+    door_id:
+      name: Door ID
+      description: Domonap doorId.
+      required: true
+      selector:
+        text:
+    config_entry_id:
+      name: Config entry id
+      description: Optional. Use when you have multiple Domonap accounts configured.
+      required: false
+      selector:
+        text:
+
+open_relay_by_key_id:
+  name: Open relay by key id
+  description: Opens the intercom relay using a Domonap keyId.
+  fields:
+    key_id:
+      name: Key ID
+      description: Domonap keyId.
+      required: true
+      selector:
+        text:
+    config_entry_id:
+      name: Config entry id
+      description: Optional. Use when you have multiple Domonap accounts configured.
+      required: false
+      selector:
+        text:
+
+open_relay_by_last_call_door_id:
+  name: Open door from last call
+  description: Opens the door using DoorId from the last incoming call sensor. If the sensor state is unknown/unavailable, does nothing.
+  fields:
+    entity_id:
+      name: Sensor entity id
+      description: Optional. Entity id of the sensor that stores DoorId of the last call.
+      required: false
+      selector:
+        entity:
+          domain: sensor
+    config_entry_id:
+      name: Config entry id
+      description: Optional. Use when you have multiple Domonap accounts configured.
+      required: false
+      selector:
+        text:

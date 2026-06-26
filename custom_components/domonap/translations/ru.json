@@ -1,0 +1,63 @@
+{
+  "config": {
+    "abort": {
+      "already_configured": "Устройство уже настроено",
+      "reauth_successful": "Повторная авторизация выполнена"
+    },
+    "error": {
+      "confirmation_failed": "Ошибка подтверждения",
+      "authorization_failed": "Ошибка аутентификации",
+      "unknown": "Неизвестная ошибка"
+    },
+    "step": {
+      "user": {
+        "data": {
+          "country_code": "Код страны",
+          "phone_number": "Номер телефона"
+        }
+      },
+      "confirm": {
+        "data": {
+          "confirm_code": "Код подтверждения"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Повторная авторизация",
+        "description": "Для интеграции Domonap необходимо повторно подтвердить авторизацию. После продолжения код подтверждения будет отправлен на сохраненный номер телефона."
+      }
+    }
+  },
+  "entity": {
+    "button": {
+      "open_door": {
+        "name": "Открыть дверь"
+      },
+      "open_relay_by_last_call_door_id": {
+        "name": "Открыть дверь с которой произошел последний звонок"
+      }
+    },
+    "binary_sensor": {
+      "incoming_call": {
+        "name": "Входящий звонок"
+      }
+    },
+    "sensor": {
+      "door_code": {
+        "name": "Код двери"
+      },
+      "last_call_door_id": {
+        "name": "Door ID последнего звонка"
+      }
+    },
+    "camera": {
+      "camera": {
+        "name": "Камера"
+      }
+    },
+    "image": {
+      "incoming_call_image": {
+        "name": "Фото звонка"
+      }
+    }
+  }
+}
