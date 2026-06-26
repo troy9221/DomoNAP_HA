@@ -59,8 +59,8 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
     api = hass.data[DOMAIN][config_entry.entry_id][API]
     proxy = hass.data[DOMAIN][WEBRTC_PROXY]
     proxy_secret = config_entry.data.get(PARAM_WEBRTC_PROXY_SECRET)
-    keys = await api.get_all_keys()
-    key_entities = _build_key_camera_entities(api, proxy, proxy_secret, keys)
+    key_response = await api.get_all_keys()
+    key_entities = _build_key_camera_entities(api, proxy, proxy_secret, key_response)
     if key_entities:
         async_add_entities(key_entities, True)
 
@@ -77,28 +77,32 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
     return True
 
 
-def _build_key_camera_entities(api, proxy, proxy_secret: str | None, keys: list[dict]) -> list[Camera]:
-    if not isinstance(keys, list):
+def _build_key_camera_entities(api, proxy, proxy_secret: str | None, response) -> list[Camera]:
+    if isinstance(response, Exception):
+        _LOGGER.exception("Failed to load Domonap key cameras", exc_info=response)
+        return []
+
+    if not isinstance(response, dict):
         _LOGGER.warning(
-            "Unexpected Domonap key camera payload: %s", type(keys).__name__
+            "Unexpected Domonap key camera payload: %s", type(response).__name__
         )
         return []
 
+    if "error" in response:
+        _log_api_error("Loading Domonap key cameras", response)
+        return []
+
     entities: list[Camera] = []
-    for key in keys:
+    for key in response.get("results", []):
         key_id = key.get("id")
         name = key.get("name")
-        key_address = key.get("address")
+        address = key.get("addressString")
         if not key_id or not name:
             _LOGGER.debug("Skipping invalid key camera payload: %s", key)
             continue
 
         if not (key.get("httpVideoUrl") or key.get("webrtcVideoUrl")):
             continue
-
-        device_name = name
-        if key_address:
-            device_name = f"{name} ({key_address})"
 
         camera_class = (
             IntercomWebRTCCamera if key.get("webrtcVideoUrl") else IntercomCamera
@@ -113,7 +117,7 @@ def _build_key_camera_entities(api, proxy, proxy_secret: str | None, keys: list[
                 key,
                 proxy=proxy,
                 proxy_secret=proxy_secret,
-                device_name=device_name,
+                address=address,
             )
         )
 
@@ -210,6 +214,7 @@ def _make_video_camera_entity(
 
     camera_id = camera.get("id")
     name = camera.get("name")
+    address = camera.get("addressString")
     if not camera_id or not name:
         _LOGGER.debug("Skipping invalid Domonap video camera payload: %s", camera)
         return None
@@ -239,6 +244,7 @@ def _make_video_camera_entity(
         device_name=name,
         device_model="Video Camera",
         preserve_via_device=False,
+        address=address,
     )
 
 
@@ -274,6 +280,7 @@ class IntercomCamera(Camera):
         device_model: str = "Intercom Device",
         via_device_identifier: str | None = None,
         preserve_via_device: bool = True,
+        address: str | None = None,
     ):
         super().__init__()
         self._api = api
@@ -289,6 +296,7 @@ class IntercomCamera(Camera):
         self._device_identifier = device_identifier or key_id
         self._device_name = device_name or name
         self._device_model = device_model
+        self._address = address
         if preserve_via_device:
             self._via_device_identifier = via_device_identifier or key_id
         else:
@@ -297,6 +305,8 @@ class IntercomCamera(Camera):
     @property
     def extra_state_attributes(self):
         attributes = dict(self._key_data)
+        if self._address:
+            attributes["addressString"] = self._address
         if self._proxy_stream_path:
             attributes["go2rtc_webrtc_path"] = self._proxy_stream_path
         if self._proxy_stream_url:
@@ -338,6 +348,8 @@ class IntercomCamera(Camera):
             "manufacturer": "Domonap",
             "model": self._device_model,
         }
+        if self._address:
+            info["suggested_area"] = self._address
         if self._via_device_identifier:
             info["via_device"] = (DOMAIN, self._via_device_identifier)
         return info

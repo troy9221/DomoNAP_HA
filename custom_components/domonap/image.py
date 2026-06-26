@@ -17,7 +17,12 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
     entities: list[IntercomCallImageEntity] = []
     api = hass.data[DOMAIN][config_entry.entry_id][API]
 
-    keys = await api.get_all_keys()
+    response = await api.get_all_keys()
+    if isinstance(response, dict) and "error" in response:
+        _LOGGER.error("Failed to load Domonap keys for image entities: %s", response)
+        async_add_entities(entities, True)
+        return
+    keys = response.get("results", [])
 
     for key in keys:
         # создаём сущность только если есть стартовый превью-URL
@@ -25,7 +30,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
             key_id: str = key["id"]
             door_id: str = key["doorId"]
             door_name: str = key["name"]
-            key_address: str | None = key.get("address")
+            address: Optional[str] = key.get("addressString")
             photo_url: str = key["videoPreview"]
 
             entities.append(
@@ -35,7 +40,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
                     key_id=key_id,
                     door_id=door_id,
                     device_name=door_name,
-                    key_address=key_address,
+                    address=address,
                     photo_url=photo_url,
                     key_data=key,
                 )
@@ -56,7 +61,7 @@ class IntercomCallImageEntity(ImageEntity):
         key_id: str,
         door_id: str,
         device_name: str,
-        key_address: Optional[str] = None,
+        address: Optional[str] = None,
         photo_url: Optional[str] = None,
         key_data: dict = None,
     ):
@@ -65,7 +70,7 @@ class IntercomCallImageEntity(ImageEntity):
         self._key_id = key_id
         self._door_id = door_id
         self._device_name = device_name
-        self._key_address = key_address
+        self._address = address
         self._photo_url = photo_url
         self._key_data = key_data
         self._image_bytes: Optional[bytes] = None
@@ -74,7 +79,10 @@ class IntercomCallImageEntity(ImageEntity):
     @property
     def extra_state_attributes(self):
         """Return the state attributes."""
-        return self._key_data
+        attrs = dict(self._key_data) if self._key_data else {}
+        if self._address:
+            attrs["addressString"] = self._address
+        return attrs
 
     @property
     def unique_id(self) -> str:
@@ -82,15 +90,15 @@ class IntercomCallImageEntity(ImageEntity):
 
     @property
     def device_info(self):
-        name = self._device_name
-        if self._key_address:
-            name = f"{self._device_name} ({self._key_address})"
-        return {
+        info = {
             "identifiers": {(DOMAIN, self._key_id)},
-            "name": name,
+            "name": self._device_name,
             "manufacturer": "Domonap",
             "model": "Intercom Device",
         }
+        if self._address:
+            info["suggested_area"] = self._address
+        return info
 
     async def async_added_to_hass(self) -> None:
         self._unsub = self.hass.bus.async_listen(

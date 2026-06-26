@@ -1,4 +1,5 @@
 import logging
+from typing import Optional
 
 from homeassistant.components.button import ButtonEntity
 from homeassistant.core import HomeAssistant
@@ -19,14 +20,19 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
     phone_digits = extract_phone_digits(config_entry) or config_entry.entry_id
     entities.append(IntercomOpenLastCallDoor(api, config_entry.entry_id, phone_digits))
 
-    # Existing per-door buttons
-    keys = await api.get_all_keys()
+    # Existing per-door buttons — use get_all_keys() to get ALL keys (all types, all pages)
+    response = await api.get_all_keys()
+    if isinstance(response, dict) and "error" in response:
+        _LOGGER.error("Failed to load Domonap keys for buttons: %s", response)
+        async_add_entities(entities, True)
+        return
+    keys = response.get("results", [])
     for key in keys:
         key_id = key["id"]
         door_id = key["doorId"]
         door_name = key["name"]
-        key_address = key.get("address")
-        entities.append(IntercomDoor(api, key_id, door_id, door_name, key_address, key))
+        address = key.get("addressString")
+        entities.append(IntercomDoor(api, key_id, door_id, door_name, address, key))
 
     async_add_entities(entities, True)
 
@@ -93,18 +99,21 @@ class IntercomDoor(ButtonEntity):
     _attr_icon = "mdi:lock"
     _attr_translation_key = "open_door"
 
-    def __init__(self, api, key_id, door_id: str, name: str, key_address: str | None, key_data: dict):
+    def __init__(self, api, key_id, door_id: str, name: str, address: Optional[str], key_data: dict):
         self._api = api
         self._key_id = key_id
         self._door_id = door_id
         self._name = name
-        self._key_address = key_address
+        self._address = address
         self._key_data = key_data
 
     @property
     def extra_state_attributes(self):
         """Return the state attributes."""
-        return self._key_data
+        attrs = dict(self._key_data)
+        if self._address:
+            attrs["addressString"] = self._address
+        return attrs
 
     @property
     def unique_id(self):
@@ -112,16 +121,16 @@ class IntercomDoor(ButtonEntity):
 
     @property
     def device_info(self):
-        name = self._name
-        if self._key_address:
-            name = f"{self._name} ({self._key_address})"
-        return {
+        info = {
             "identifiers": {(DOMAIN, self._key_id)},
-            "name": name,
+            "name": self._name,
             "manufacturer": "Domonap",
             "model": "Intercom Device",
             "via_device": (DOMAIN, self._key_id),
         }
+        if self._address:
+            info["suggested_area"] = self._address
+        return info
 
     async def async_press(self):
         try:

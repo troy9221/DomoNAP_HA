@@ -54,8 +54,8 @@ class IntercomFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_user(self, user_input=None):
         errors = {}
         if user_input is not None:
-            self._country_code = user_input[CONF_COUNTRY_CODE]
-            self._phone_number = user_input[CONF_PHONE_NUMBER]
+            self._country_code = self._sanitize_number(user_input[CONF_COUNTRY_CODE])
+            self._phone_number = self._sanitize_number(user_input[CONF_PHONE_NUMBER])
 
             response = await self._send_authorization_code()
             if response is not True:
@@ -114,6 +114,9 @@ class IntercomFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             step_id="confirm", data_schema=data_schema, errors=errors
         )
 
+    def _sanitize_number(self, input_string):
+        sanitized = re.sub(r'\D', '', input_string)
+        return sanitized
 
     async def _send_authorization_code(self):
         return await self._api.authorize(self._country_code, self._phone_number)

@@ -11,15 +11,29 @@ _LOGGER = logging.getLogger(__name__)
 async def async_setup_entry(hass, config_entry, async_add_entities):
     entities = []
     api = hass.data[DOMAIN][config_entry.entry_id][API]
-    keys = await api.get_all_keys()
+    response = await api.get_all_keys()
 
+    if not isinstance(response, dict):
+        _LOGGER.warning(
+            "Unexpected Domonap key payload for call sensors: %s",
+            type(response).__name__,
+        )
+        async_add_entities(entities, True)
+        return
+
+    if "error" in response:
+        _LOGGER.error("Failed to load Domonap keys for call sensors: %s", response)
+        async_add_entities(entities, True)
+        return
+
+    keys = response.get("results", [])
     seen_door_ids = set()
 
     for key in keys:
         key_id = key.get("id")
         door_id = key.get("doorId")
         door_name = key.get("name")
-        key_address = key.get("address")
+        address = key.get("addressString")
         if not key_id or not door_id or not door_name:
             _LOGGER.debug("Skipping invalid Domonap call sensor key payload: %s", key)
             continue
@@ -33,7 +47,7 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
         if door_id in seen_door_ids:
             continue
         seen_door_ids.add(door_id)
-        entities.append(IntercomCallBinarySensor(hass, api, key_id, door_id, door_name, key_address, key))
+        entities.append(IntercomCallBinarySensor(hass, api, key_id, door_id, door_name, address, key))
 
     async_add_entities(entities, True)
 
@@ -45,13 +59,13 @@ class IntercomCallBinarySensor(BinarySensorEntity):
     _attr_translation_key = "incoming_call"
     _attr_should_poll = False
 
-    def __init__(self, hass: HomeAssistant, api, key_id: str, door_id: str, name: str, key_address: str | None, key_data: dict):
+    def __init__(self, hass: HomeAssistant, api, key_id: str, door_id: str, name: str, address: Optional[str], key_data: dict):
         self._hass = hass
         self._api = api
         self._key_id = key_id
         self._door_id = door_id
         self._name = name
-        self._key_address = key_address
+        self._address = address
         self._key_data = key_data
         self._state = False
         self._reset_timer: Optional[Callable[[], None]] = None
@@ -67,19 +81,22 @@ class IntercomCallBinarySensor(BinarySensorEntity):
 
     @property
     def extra_state_attributes(self):
-        return self._key_data
+        attrs = dict(self._key_data)
+        if self._address:
+            attrs["addressString"] = self._address
+        return attrs
 
     @property
     def device_info(self):
-        name = self._name
-        if self._key_address:
-            name = f"{self._name} ({self._key_address})"
-        return {
+        info = {
             "identifiers": {(DOMAIN, self._key_id)},
-            "name": name,
+            "name": self._name,
             "manufacturer": "Domonap",
             "model": "Intercom Device",
         }
+        if self._address:
+            info["suggested_area"] = self._address
+        return info
 
     async def async_added_to_hass(self):
         self._listener = self._hass.bus.async_listen(

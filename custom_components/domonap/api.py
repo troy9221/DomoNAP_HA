@@ -2,7 +2,7 @@ import logging
 import aiohttp
 import asyncio
 from datetime import datetime, timezone
-from secrets import token_bytes, token_urlsafe
+from secrets import token_bytes
 from typing import Any, Callable, Dict, Optional, Union
 from uuid import UUID
 
@@ -41,19 +41,12 @@ def _generate_unique_android_guid() -> str:
 
 
 def _generate_device_token() -> str:
-    return f"{token_urlsafe(22)}:APA91b{token_urlsafe(134)}"
+    return _generate_unique_android_guid()
 
 
 def is_android_guid(value: Optional[str]) -> bool:
-    """Проверяет, является ли значение Android GUID (UUID v4) или FCM-токеном."""
     if not isinstance(value, str):
         return False
-    
-    # Проверяем формат FCM-токена (как в боте)
-    if value.startswith("APA91b") and ":" in value:
-        return True
-    
-    # Проверяем формат Android GUID
     try:
         guid = UUID(value)
     except ValueError:
@@ -325,7 +318,6 @@ class IntercomAPI:
         return res
 
     def _phone_number(self, country_code: str, phone_number: str) -> Dict[str, int]:
-        """Формат номера телефона для API — числа, не строки."""
         return {"countryCode": int(country_code), "number": int(phone_number)}
 
     async def update_token(self) -> Dict[str, Any]:
@@ -371,53 +363,125 @@ class IntercomAPI:
         if user:
             return user.get("userProfile").get("username")
 
-    async def get_paged_keys(self, per_page: int = 100, current_page: int = 1, keys_type: str = "Main"):
+    async def get_paged_keys(self, per_page: int = 100, current_page: int = 1, keys_type="Main"):
+        """Получить ключи по типу. keys_type может быть строкой ('Main') или числом (0, 1, 2...)."""
         payload = {
             "currentPage": current_page,
             "perPage": per_page,
             "keysType": keys_type,
-            "search": None,
         }
         return await self._post("/client-api/Key/GetPagedKeysByKeysType", payload, need_auth=True, expect="json")
 
-    async def get_all_keys(self, keys_types: list[str] | None = None, per_page: int = 100) -> list[dict]:
-        """Fetch keys of all specified types across all pages.
+    async def _fetch_keys_by_type(self, keys_type, per_page: int = 100) -> list:
+        """Получить все ключи указанного типа с пагинацией. Возвращает список ключей или пустой список."""
+        all_keys = []
+        current_page = 1
+        type_label = str(keys_type)
 
-        Returns a merged list of key dicts. Each dict is augmented with
-        ``_keys_type`` so callers know which type bucket it came from.
-        """
-        if keys_types is None:
-            keys_types = ["Main", "Guest"]
+        while True:
+            keys_data = await self.get_paged_keys(
+                per_page=per_page, current_page=current_page, keys_type=keys_type
+            )
 
-        all_keys: list[dict] = []
-        for keys_type in keys_types:
-            page = 1
-            while True:
-                result = await self.get_paged_keys(
-                    per_page=per_page,
-                    current_page=page,
-                    keys_type=keys_type,
+            if isinstance(keys_data, dict) and "error" in keys_data:
+                _LOGGER.debug(
+                    "Key type '%s' not supported: %s", type_label, keys_data.get("error")
                 )
-                if not isinstance(result, dict) or "error" in result:
-                    _LOGGER.warning(
-                        "Failed to fetch Domonap keys (type=%s, page=%s): %s",
-                        keys_type,
-                        page,
-                        result if isinstance(result, dict) else type(result).__name__,
-                    )
-                    break
+                return []
 
-                page_keys = result.get("results", [])
-                for key in page_keys:
-                    key["_keys_type"] = keys_type
-                all_keys.extend(page_keys)
+            keys = keys_data.get("results", [])
+            if keys:
+                _LOGGER.debug(
+                    "Found %d keys of type '%s' on page %d",
+                    len(keys), type_label, current_page,
+                )
+                all_keys.extend(keys)
+            else:
+                if current_page == 1:
+                    _LOGGER.debug("No keys of type '%s' found", type_label)
+                break
 
-                total_pages = result.get("totalPages", 1)
-                if page >= total_pages:
-                    break
-                page += 1
+            page_count = keys_data.get("pageCount", 1)
+            if current_page >= page_count:
+                break
+
+            current_page += 1
+
+            # Protection against infinite loop
+            if current_page > 50:
+                _LOGGER.warning("Too many pages for key type '%s', aborting", type_label)
+                break
 
         return all_keys
+
+    @staticmethod
+    def is_pass_key(key: dict) -> bool:
+        """Determine if a key is a pass (not a door).
+        Passes have names like 'Пропуск от ...'."""
+        name = (key.get("name") or "").strip().lower()
+        return name.startswith("пропуск ")
+
+    async def get_all_keys(self, keys_filter: str = "all") -> dict:
+        """Get all user keys with filtering and pagination.
+
+        keys_filter:
+            'doors'  — only doors (no passes)
+            'passes' — only passes
+            'all'    — everything (doors + passes)
+
+        API Domonap uses .NET enum KeysType:
+            0 / 'Main' — main keys (resident doors)
+            1 — Resident (same doors)
+            2 — all keys (doors + passes)
+            3 — passes only
+        Types 5-10 return duplicates, so we don't query them.
+        """
+        all_keys = []
+        per_page = 100
+
+        if keys_filter == "doors":
+            _LOGGER.debug("Getting keys: doors only (type 1)")
+            keys = await self._fetch_keys_by_type(1, per_page)
+            all_keys.extend(keys)
+        elif keys_filter == "passes":
+            _LOGGER.debug("Getting keys: passes only (type 3)")
+            keys = await self._fetch_keys_by_type(3, per_page)
+            all_keys.extend(keys)
+        else:
+            _LOGGER.debug("Getting keys: all (type 2 + type 3) in parallel")
+            keys_2, keys_3 = await asyncio.gather(
+                self._fetch_keys_by_type(2, per_page),
+                self._fetch_keys_by_type(3, per_page),
+            )
+            all_keys.extend(keys_2)
+            all_keys.extend(keys_3)
+
+        # Remove duplicates by id
+        unique_keys = {}
+        for key in all_keys:
+            key_id = key.get("id")
+            if key_id and key_id not in unique_keys:
+                unique_keys[key_id] = key
+
+        all_keys = list(unique_keys.values())
+
+        # Additional client-side filtering
+        if keys_filter == "doors":
+            all_keys = [k for k in all_keys if not self.is_pass_key(k)]
+        elif keys_filter == "passes":
+            all_keys = [k for k in all_keys if self.is_pass_key(k)]
+
+        combined_data = {
+            "results": all_keys,
+            "currentPage": 1,
+            "pageCount": 1,
+            "pageSize": len(all_keys),
+            "rowCount": len(all_keys),
+            "perPage": len(all_keys),
+        }
+
+        _LOGGER.info("Keys loaded: %d (filter=%s)", len(all_keys), keys_filter)
+        return combined_data
 
     async def get_video_area(self):
         return await self._post(

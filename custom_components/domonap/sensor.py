@@ -18,14 +18,19 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
     entities: list[SensorEntity] = []
     api = hass.data[DOMAIN][config_entry.entry_id][API]
 
-    keys = await api.get_all_keys()
+    response = await api.get_all_keys()
+    if isinstance(response, dict) and "error" in response:
+        _LOGGER.error("Failed to load Domonap keys for sensors: %s", response)
+        async_add_entities(entities, True)
+        return
+    keys = response.get("results", [])
 
     for key in keys:
         try:
             key_id: str = key["id"]
             door_id: str = key["doorId"]
             door_name: str = key["name"]
-            key_address: Optional[str] = key.get("address")
+            address: Optional[str] = key.get("addressString")
             pin: Optional[str] = key.get("domofonPublicPin")
 
             if not pin:
@@ -41,7 +46,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
                     key_id=key_id,
                     door_id=door_id,
                     device_name=door_name,
-                    key_address=key_address,
+                    address=address,
                     pin=pin,
                     key_data=key,
                 ))
@@ -62,11 +67,11 @@ class DomonapDoorCodeSensor(SensorEntity):
     _attr_translation_key = "door_code"
     _attr_should_poll = False
 
-    def __init__(self, key_id: str, door_id: str, device_name: str, key_address: Optional[str], pin: str, key_data: dict):
+    def __init__(self, key_id: str, door_id: str, device_name: str, address: Optional[str], pin: str, key_data: dict):
         self._key_id = key_id
         self._door_id = door_id
         self._device_name = device_name
-        self._key_address = key_address
+        self._address = address
         self._pin = pin
         self._key_data = key_data
 
@@ -82,22 +87,22 @@ class DomonapDoorCodeSensor(SensorEntity):
     def extra_state_attributes(self):
         """Return the state attributes."""
         attrs = dict(self._key_data)
-        if self._key_address:
-            attrs["key_address"] = self._key_address
+        if self._address:
+            attrs["addressString"] = self._address
         return attrs
 
     @property
     def device_info(self):
         # Имя устройства — это "дверь". Сущность будет называться "<device>: <translated entity name>"
-        name = self._device_name
-        if self._key_address:
-            name = f"{self._device_name} ({self._key_address})"
-        return {
+        info = {
             "identifiers": {(DOMAIN, self._key_id)},
-            "name": name,
+            "name": self._device_name,
             "manufacturer": "Domonap",
             "model": "Intercom Device",
         }
+        if self._address:
+            info["suggested_area"] = self._address
+        return info
 
 
 class DomonapLastCallDoorIdSensor(SensorEntity):
