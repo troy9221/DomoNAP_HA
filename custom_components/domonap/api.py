@@ -2,7 +2,7 @@ import logging
 import aiohttp
 import asyncio
 from datetime import datetime, timezone
-from secrets import token_bytes
+from secrets import token_bytes, token_urlsafe
 from typing import Any, Callable, Dict, Optional, Union
 from uuid import UUID
 
@@ -41,12 +41,19 @@ def _generate_unique_android_guid() -> str:
 
 
 def _generate_device_token() -> str:
-    return _generate_unique_android_guid()
+    return f"{token_urlsafe(22)}:APA91b{token_urlsafe(134)}"
 
 
 def is_android_guid(value: Optional[str]) -> bool:
+    """Проверяет, является ли значение Android GUID (UUID v4) или FCM-токеном."""
     if not isinstance(value, str):
         return False
+    
+    # Проверяем формат FCM-токена (как в боте)
+    if value.startswith("APA91b") and ":" in value:
+        return True
+    
+    # Проверяем формат Android GUID
     try:
         guid = UUID(value)
     except ValueError:
@@ -318,6 +325,7 @@ class IntercomAPI:
         return res
 
     def _phone_number(self, country_code: str, phone_number: str) -> Dict[str, int]:
+        """Формат номера телефона для API — числа, не строки."""
         return {"countryCode": int(country_code), "number": int(phone_number)}
 
     async def update_token(self) -> Dict[str, Any]:
