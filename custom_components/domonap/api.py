@@ -546,6 +546,14 @@ class IntercomAPI:
         elif keys_filter == "passes":
             all_keys = [k for k in all_keys if self.is_pass_key(k)]
 
+        # Дизамбигуация одинаковых имён. В аккаунте встречаются РАЗНЫЕ двери
+        # (разный doorId) с идентичным именем — напр. дворовая «Калитка 1» и
+        # паркинговая «Калитка 1». В UASH они выглядят как дубликаты устройств,
+        # из-за чего кажется, что «второй» двери нет. Добавляем к дубликатам
+        # различающий суффикс: адрес, а если он не помогает — короткий хвост
+        # doorId. Это меняет только отображаемое имя, не трогая unique_id.
+        self._disambiguate_names(all_keys)
+
         combined_data = {
             "results": all_keys,
             "currentPage": 1,
@@ -562,6 +570,35 @@ class IntercomAPI:
             [str(k.get("name")) for k in all_keys],
         )
         return combined_data
+
+    @staticmethod
+    def _disambiguate_names(keys: list) -> None:
+        """Сделать отображаемые имена дверей уникальными (in-place).
+
+        Разные двери (разный doorId) с одинаковым name сбиваются в UI в один
+        неразличимый пункт. Для каждой группы дублей добавляем к name суффикс:
+        сначала пробуем addressString, а если он пуст/не различает — короткий
+        хвост doorId. unique_id (door_id) не затрагивается.
+        """
+        # Группируем индексы ключей по имени.
+        by_name: dict[str, list[int]] = {}
+        for idx, key in enumerate(keys):
+            name = (key.get("name") or "").strip()
+            by_name.setdefault(name, []).append(idx)
+
+        for name, indices in by_name.items():
+            if len(indices) < 2:
+                continue  # имя уникально — суффикс не нужен
+
+            for idx in indices:
+                key = keys[idx]
+                address = (key.get("addressString") or "").strip()
+                if address and address.lower() != name.lower():
+                    suffix = address
+                else:
+                    door_id = str(key.get("doorId") or key.get("id") or "")
+                    suffix = door_id[-4:] if door_id else "?"
+                key["name"] = f"{name} ({suffix})" if name else suffix
 
     async def get_video_area(self):
         return await self._post(
