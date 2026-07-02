@@ -15,7 +15,23 @@ DEFAULT_JSON_CONTENT_TYPE = "application/json; charset=UTF-8"
 DEFAULT_USER_AGENT = "okhttp/5.3.2"
 _ANDROID_GUID_RETRY_LIMIT = 8
 _GENERATED_ANDROID_GUIDS: set[str] = set()
+# Защита от бесконечной пагинации при получении ключей: максимальное
+# количество страниц, которое мы готовы запросить для одного типа ключей.
 MAX_KEY_PAGES = 50
+
+# API Domonap использует .NET enum KeysType. Разные типы возвращают РАЗНЫЕ
+# подмножества ключей (двери/калитки/пропуски), а не строгие надмножества,
+# поэтому чтобы получить действительно все двери, нужно опросить несколько
+# типов и объединить результаты с дедупликацией по id.
+#   0 / Main      — основные ключи (двери резидента)
+#   1 / Resident  — двери резидента
+#   2 / All       — «все» ключи (но на практике неполный набор)
+#   3 / Pass      — пропуски
+#   4+            — дополнительные типы (калитки, служебные двери и т.п.)
+# Неподдерживаемые типы возвращают ошибку и просто дают пустой список.
+KEY_TYPES_ALL = (0, 1, 2, 3, 4, 5, 6)
+KEY_TYPES_DOORS = (0, 1, 2, 4, 5, 6)
+KEY_TYPES_PASSES = (3,)
 
 
 def _with_app_header_suffix(value: str) -> str:
@@ -430,32 +446,32 @@ class IntercomAPI:
             'passes' — only passes
             'all'    — everything (doors + passes)
 
-        API Domonap uses .NET enum KeysType:
-            0 / 'Main' — main keys (resident doors)
-            1 — Resident (same doors)
-            2 — all keys (doors + passes)
-            3 — passes only
-        Types 5-10 return duplicates, so we don't query them.
+        Разные значения KeysType возвращают РАЗНЫЕ подмножества ключей, поэтому
+        мы опрашиваем несколько типов параллельно и объединяем результаты с
+        дедупликацией по id — так не теряются калитки и отдельные двери,
+        которых нет в «сводных» типах.
         """
-        all_keys = []
         per_page = 100
 
         if keys_filter == "doors":
-            _LOGGER.debug("Getting keys: doors only (type 1)")
-            keys = await self._fetch_keys_by_type(1, per_page)
-            all_keys.extend(keys)
+            key_types = KEY_TYPES_DOORS
         elif keys_filter == "passes":
-            _LOGGER.debug("Getting keys: passes only (type 3)")
-            keys = await self._fetch_keys_by_type(3, per_page)
-            all_keys.extend(keys)
+            key_types = KEY_TYPES_PASSES
         else:
-            _LOGGER.debug("Getting keys: all (type 2 + type 3) in parallel")
-            keys_2, keys_3 = await asyncio.gather(
-                self._fetch_keys_by_type(2, per_page),
-                self._fetch_keys_by_type(3, per_page),
-            )
-            all_keys.extend(keys_2)
-            all_keys.extend(keys_3)
+            key_types = KEY_TYPES_ALL
+
+        _LOGGER.debug(
+            "Getting keys (filter=%s) across key types %s in parallel",
+            keys_filter,
+            key_types,
+        )
+        results = await asyncio.gather(
+            *(self._fetch_keys_by_type(key_type, per_page) for key_type in key_types)
+        )
+
+        all_keys = []
+        for keys in results:
+            all_keys.extend(keys)
 
         # Remove duplicates by id
         unique_keys = {}
