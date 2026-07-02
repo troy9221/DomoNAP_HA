@@ -174,10 +174,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             _LOGGER.debug("Exception while closing API client", exc_info=True)
 
     hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
-
-    # If this was the last entry, remove services.
+    non_entry_keys = {WEBRTC_PROXY, MEDIA_PROXY}
     remaining_entries = [
-        key for key in hass.data.get(DOMAIN, {}) if key != WEBRTC_PROXY
+        key for key in hass.data.get(DOMAIN, {}) if key not in non_entry_keys
     ]
     if not remaining_entries:
         from .actions import async_unload_actions

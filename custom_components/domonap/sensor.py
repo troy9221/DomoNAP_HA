@@ -123,8 +123,6 @@ class DomonapLastCallDoorIdSensor(SensorEntity):
 
     @property
     def device_info(self):
-        # Отображаем сенсор как часть устройства-аккаунта (телефон).
-        # Идентификатор должен быть стабильным и уникальным.
         phone = self._phone_digits or self._entry_id
         return {
             "identifiers": {(DOMAIN, phone)},
@@ -175,7 +173,7 @@ class DomonapLastCallDoorIdSensor(SensorEntity):
         # event.data should be JSON-serializable (dict with simple values). Keep it as-is.
         # Add our own timestamp of when HA processed the event.
         attrs = dict(event.data)
-        attrs["ts"] = datetime.now(timezone.utc).isoformat() + "Z"
+        attrs["ts"] = datetime.now(timezone.utc).isoformat()
 
         self._attrs = attrs
         self.async_write_ha_state()

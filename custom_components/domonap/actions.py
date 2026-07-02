@@ -9,7 +9,11 @@ from homeassistant.exceptions import HomeAssistantError
 import homeassistant.helpers.config_validation as cv
 
 from .const import DOMAIN, API
-from .util import extract_phone_digits
+from .util import (
+    INVALID_LAST_CALL_STATES,
+    extract_phone_digits,
+    open_relay_from_last_call_state,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -153,49 +157,31 @@ async def async_setup_actions(hass: HomeAssistant) -> None:
         if st is None:
             return {"status": "error", "reason": "sensor_not_found", "entity_id": entity_id}
 
-        if st.state in ("unknown", "unavailable", "none", "None", ""):
+        if st.state in INVALID_LAST_CALL_STATES:
             return {"status": "skipped", "reason": "no_last_call", "entity_id": entity_id, "state": st.state}
 
-        door_id = st.state
-
         attrs = st.attributes or {}
-        raw_call_id = attrs.get("CallId")
-        call_id = str(raw_call_id).strip() if raw_call_id is not None else ""
 
         # Try to get a human-friendly door name from sensor attributes.
-        door_name = None
-        try:
-            door_name = (
-                attrs.get("DoorName")
-                or attrs.get("door_name")
-                or attrs.get("Address")
-                or attrs.get("Body")
-                or attrs.get("Title")
-            )
-        except Exception:
-            door_name = None
+        door_name = (
+            attrs.get("DoorName")
+            or attrs.get("door_name")
+            or attrs.get("Address")
+            or attrs.get("Body")
+            or attrs.get("Title")
+        )
 
-        res: Any = await api.open_relay_by_door_id(door_id)
-        ok = isinstance(res, dict) and res.get("ok") is True
-
-        end_call_result: Any = None
-        # Simplified: CallId must be non-empty after strip().
-        if ok and call_id:
-            try:
-                end_call_result = await api.end_call_notify(call_id)
-            except Exception:
-                _LOGGER.exception("end_call_notify failed for call_id=%s", call_id)
-                end_call_result = {"ok": False, "error": "exception"}
+        result = await open_relay_from_last_call_state(api, st)
 
         return {
-            "status": "ok" if ok else "error",
-            "door_id": door_id,
+            "status": "ok" if result["ok"] else "error",
+            "door_id": result["door_id"],
             "door_name": door_name,
-            "call_id": call_id or None,
-            "end_call_result": end_call_result,
+            "call_id": result["call_id"],
+            "end_call_result": result["end_call_result"],
             "entity_id": entity_id,
             "config_entry_id": entry_id,
-            "response": res,
+            "response": result["response"],
         }
 
     hass.services.async_register(

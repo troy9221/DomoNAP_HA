@@ -6,7 +6,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
 
 from .const import DOMAIN, API
-from .util import extract_phone_digits
+from .util import extract_phone_digits, is_valid_last_call_state, open_relay_from_last_call_state
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -71,27 +71,16 @@ class IntercomOpenLastCallDoor(ButtonEntity):
         # Find last-call sensor and open by its door_id.
         sensor_entity_id = f"sensor.{self._phone_digits}_last_call_door_id"
         state = self.hass.states.get(sensor_entity_id) if self.hass else None
-        if state is None or state.state in ("unknown", "unavailable", "none", "None", ""):
+        if not is_valid_last_call_state(state):
             _LOGGER.debug("No last call door_id found in %s", sensor_entity_id)
             return
 
-        door_id = state.state
-        raw_call_id = state.attributes.get("CallId") if state.attributes else None
-        call_id = str(raw_call_id).strip() if raw_call_id is not None else ""
         try:
-            res = await self._api.open_relay_by_door_id(door_id)
-            if not (isinstance(res, dict) and res.get("ok") is True):
-                _LOGGER.error("Failed to open relay by last call door_id=%s: %s", door_id, res)
-                return
-
-            # Simplified: CallId must be non-empty after strip().
-            if call_id:
-                end_res = await self._api.end_call_notify(call_id)
-                if not (isinstance(end_res, dict) and end_res.get("ok") is True):
-                    _LOGGER.error("end_call_notify failed for call_id=%s: %s", call_id, end_res)
-
+            await open_relay_from_last_call_state(self._api, state)
         except Exception:
-            _LOGGER.exception("Error opening relay by last call door_id=%s", door_id)
+            _LOGGER.exception(
+                "Error opening relay by last call from %s", sensor_entity_id
+            )
 
 
 class IntercomDoor(ButtonEntity):

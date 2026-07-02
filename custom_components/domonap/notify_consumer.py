@@ -2,7 +2,7 @@ import json
 import logging
 import asyncio
 import aiohttp
-from random import randint
+from random import uniform
 from typing import Callable, Optional, Any, Iterable, Union
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -60,8 +60,9 @@ class IntercomNotifyConsumer:
                 _LOGGER.debug("Notify loop error: %s", e)
             if self._stop_event.is_set():
                 break
-            await asyncio.sleep(self._reconnect_delay)
-            self._reconnect_delay = randint(self._reconnect_delay, self._max_reconnect)
+            delay = min(self._reconnect_delay, self._max_reconnect)
+            await asyncio.sleep(delay + uniform(0, 0.5))
+            self._reconnect_delay = min(self._reconnect_delay * 2, self._max_reconnect)
 
     async def stop(self) -> None:
         self._stop_event.set()
@@ -101,7 +102,7 @@ class IntercomNotifyConsumer:
             _LOGGER.debug("WS connected")
             self._connected = True
             self._reconnect_delay = 1
-            self._username = await self._api.get_username()
+            self._username = await self._api.get_username() or ""
             await ws.send_str(WS_HANDSHAKE_MESSAGE)
             async for msg in ws:
                 if self._stop_event.is_set():
@@ -163,13 +164,14 @@ class IntercomNotifyConsumer:
                 'user': user,
                 'status': status
             })
-
-            # Обработка ситуации когда под одним аккаунтом выполнен вход (реакция на выход) в приложение
-            # После события offline на все сессии текущего пользователя перестают приходить уведомления о звонках
             if user == self._username and status == "offline":
-                _LOGGER.debug(f"Current login user: {user} status changed to {status}. Reconnecting websocket...")
-                await self.stop()
-                await self.start()
+                _LOGGER.debug(
+                    "Current login user: %s status changed to %s. Reconnecting websocket...",
+                    user,
+                    status,
+                )
+                if not ws.closed:
+                    await ws.close()
 
         elif target == "ReceiveMessage":
             chat_data = data.get('arguments')[0]

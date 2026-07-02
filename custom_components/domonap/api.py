@@ -15,6 +15,7 @@ DEFAULT_JSON_CONTENT_TYPE = "application/json; charset=UTF-8"
 DEFAULT_USER_AGENT = "okhttp/5.3.2"
 _ANDROID_GUID_RETRY_LIMIT = 8
 _GENERATED_ANDROID_GUIDS: set[str] = set()
+MAX_KEY_PAGES = 50
 
 
 def _with_app_header_suffix(value: str) -> str:
@@ -128,9 +129,6 @@ class IntercomAPI:
         if refresh_token:
             self._refresh_token_invalid = False
         self.headers.pop("Authorization", None)
-        if self._session and not self._session.closed:
-            self._session._default_headers.clear()
-            self._session._default_headers.update(self.headers)
 
     def _parse_dt(self, val: str) -> Optional[datetime]:
         fmts = ("%Y-%m-%dT%H:%M:%S.%f%z", "%Y-%m-%dT%H:%M:%S%z")
@@ -358,10 +356,13 @@ class IntercomAPI:
     async def get_user(self) -> Union[Dict[str, Any], str]:
         return await self._post("/sso-api/User/GetUser", need_auth=True, expect="json")
 
-    async def get_username(self):
+    async def get_username(self) -> Optional[str]:
         user = await self.get_user()
-        if user:
-            return user.get("userProfile").get("username")
+        if isinstance(user, dict) and "error" not in user:
+            profile = user.get("userProfile")
+            if isinstance(profile, dict):
+                return profile.get("username")
+        return None
 
     async def get_paged_keys(self, per_page: int = 100, current_page: int = 1, keys_type="Main"):
         """Получить ключи по типу. keys_type может быть строкой ('Main') или числом (0, 1, 2...)."""
@@ -408,7 +409,7 @@ class IntercomAPI:
             current_page += 1
 
             # Protection against infinite loop
-            if current_page > 50:
+            if current_page > MAX_KEY_PAGES:
                 _LOGGER.warning("Too many pages for key type '%s', aborting", type_label)
                 break
 
