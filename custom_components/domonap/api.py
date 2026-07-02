@@ -15,9 +15,8 @@ DEFAULT_JSON_CONTENT_TYPE = "application/json; charset=UTF-8"
 DEFAULT_USER_AGENT = "okhttp/5.3.2"
 _ANDROID_GUID_RETRY_LIMIT = 8
 _GENERATED_ANDROID_GUIDS: set[str] = set()
-# Защита от бесконечной пагинации при получении ключей: максимальное
-# количество страниц, которое мы готовы запросить для одного типа ключей.
 MAX_KEY_PAGES = 50
+KEYS_CACHE_TTL = 60.0
 
 # API Domonap использует .NET enum KeysType. Разные типы возвращают РАЗНЫЕ
 # подмножества ключей (двери/калитки/пропуски), а не строгие надмножества,
@@ -102,6 +101,9 @@ class IntercomAPI:
         self._session: Optional[aiohttp.ClientSession] = None
         self._external_session: Optional[aiohttp.ClientSession] = None
         self._closed = False
+        # Кэш результата get_all_keys по фильтру: {filter: (timestamp, data)}
+        self._keys_cache: Dict[str, tuple[float, dict]] = {}
+        self._keys_cache_lock = asyncio.Lock()
 
     async def _ensure_session(self) -> aiohttp.ClientSession:
         if self._closed:
@@ -408,9 +410,10 @@ class IntercomAPI:
 
             keys = keys_data.get("results", [])
             if keys:
+                key_names = [str(k.get("name")) for k in keys if isinstance(k, dict)]
                 _LOGGER.debug(
-                    "Found %d keys of type '%s' on page %d",
-                    len(keys), type_label, current_page,
+                    "Found %d keys of type '%s' on page %d: %s",
+                    len(keys), type_label, current_page, key_names,
                 )
                 all_keys.extend(keys)
             else:
@@ -438,8 +441,41 @@ class IntercomAPI:
         name = (key.get("name") or "").strip().lower()
         return name.startswith("пропуск ")
 
+    def invalidate_keys_cache(self) -> None:
+        """Сбросить кэш ключей (например, после изменения состава дверей)."""
+        self._keys_cache.clear()
+
     async def get_all_keys(self, keys_filter: str = "all") -> dict:
-        """Get all user keys with filtering and pagination.
+        """Get all user keys with filtering and pagination (кэшируется).
+
+        При старте HA каждая платформа вызывает get_all_keys независимо;
+        чтобы не дёргать API 5+ раз, результат кэшируется на KEYS_CACHE_TTL.
+        """
+        loop = asyncio.get_event_loop()
+        now = loop.time()
+
+        cached = self._keys_cache.get(keys_filter)
+        if cached is not None and (now - cached[0]) < KEYS_CACHE_TTL:
+            _LOGGER.debug("Keys cache hit (filter=%s)", keys_filter)
+            return cached[1]
+
+        async with self._keys_cache_lock:
+            # Повторная проверка после захвата блокировки: пока мы ждали,
+            # другой вызов мог уже наполнить кэш.
+            cached = self._keys_cache.get(keys_filter)
+            now = loop.time()
+            if cached is not None and (now - cached[0]) < KEYS_CACHE_TTL:
+                _LOGGER.debug("Keys cache hit after lock (filter=%s)", keys_filter)
+                return cached[1]
+
+            combined_data = await self._fetch_all_keys(keys_filter)
+            # Кэшируем только успешный результат (без ошибок).
+            if "error" not in combined_data:
+                self._keys_cache[keys_filter] = (loop.time(), combined_data)
+            return combined_data
+
+    async def _fetch_all_keys(self, keys_filter: str = "all") -> dict:
+        """Фактически опросить API и собрать список ключей.
 
         keys_filter:
             'doors'  — only doors (no passes)
@@ -447,9 +483,14 @@ class IntercomAPI:
             'all'    — everything (doors + passes)
 
         Разные значения KeysType возвращают РАЗНЫЕ подмножества ключей, поэтому
-        мы опрашиваем несколько типов параллельно и объединяем результаты с
-        дедупликацией по id — так не теряются калитки и отдельные двери,
-        которых нет в «сводных» типах.
+        мы опрашиваем несколько типов параллельно и объединяем результаты.
+
+        Дедупликация выполняется по doorId (а НЕ по key id): одна и та же
+        физическая дверь может прийти под несколькими key id — как реальная
+        дверь («Калитка 1») и как пропуск («Пропуск от ...») с тем же doorId.
+        Поскольку сущности HA используют door_id в unique_id, дубли по doorId
+        приводили к коллизиям unique_id и «пропаданию» дверей. При коллизии
+        отдаём приоритет реальной двери над пропуском.
         """
         per_page = 100
 
@@ -473,12 +514,29 @@ class IntercomAPI:
         for keys in results:
             all_keys.extend(keys)
 
-        # Remove duplicates by id
-        unique_keys = {}
+        # Дедупликация по doorId с приоритетом реальных дверей над пропусками.
+        # Ключи без doorId (если такие есть) дедуплицируются по key id.
+        unique_keys: dict = {}
         for key in all_keys:
-            key_id = key.get("id")
-            if key_id and key_id not in unique_keys:
-                unique_keys[key_id] = key
+            door_id = key.get("doorId")
+            dedup_key = ("door", door_id) if door_id else ("id", key.get("id"))
+            if dedup_key[1] is None:
+                continue
+
+            existing = unique_keys.get(dedup_key)
+            if existing is None:
+                unique_keys[dedup_key] = key
+                continue
+
+            # Коллизия по doorId: реальная дверь важнее пропуска.
+            if self.is_pass_key(existing) and not self.is_pass_key(key):
+                _LOGGER.debug(
+                    "doorId %s: заменяем пропуск '%s' реальной дверью '%s'",
+                    door_id,
+                    existing.get("name"),
+                    key.get("name"),
+                )
+                unique_keys[dedup_key] = key
 
         all_keys = list(unique_keys.values())
 
@@ -498,6 +556,11 @@ class IntercomAPI:
         }
 
         _LOGGER.info("Keys loaded: %d (filter=%s)", len(all_keys), keys_filter)
+        _LOGGER.debug(
+            "Keys loaded names (filter=%s): %s",
+            keys_filter,
+            [str(k.get("name")) for k in all_keys],
+        )
         return combined_data
 
     async def get_video_area(self):
