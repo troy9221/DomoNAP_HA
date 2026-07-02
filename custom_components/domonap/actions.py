@@ -8,7 +8,7 @@ from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import HomeAssistantError
 import homeassistant.helpers.config_validation as cv
 
-from .const import DOMAIN, API
+from .const import DOMAIN, API, WEBRTC_PROXY, MEDIA_PROXY
 from .util import (
     INVALID_LAST_CALL_STATES,
     extract_phone_digits,
@@ -47,16 +47,45 @@ SERVICE_OPEN_RELAY_BY_LAST_CALL_DOOR_ID_SCHEMA = vol.Schema(
 )
 
 
+# Service keys stored under hass.data[DOMAIN] that are NOT config entries.
+_NON_ENTRY_KEYS = frozenset({WEBRTC_PROXY, MEDIA_PROXY})
+
+
+def _is_entry_bucket(value: Any) -> bool:
+    """True if the value looks like a config-entry data bucket (dict with API)."""
+    return isinstance(value, dict) and API in value
+
+
+def _get_entry_api(hass: HomeAssistant, entry_id: str | None) -> Any:
+    """Safely fetch the IntercomAPI object for a given entry_id."""
+    if not entry_id:
+        return None
+    bucket = hass.data.get(DOMAIN, {}).get(entry_id)
+    if not _is_entry_bucket(bucket):
+        return None
+    return bucket.get(API)
+
+
 def _select_entry_id(hass: HomeAssistant, requested_entry_id: str | None) -> str | None:
     domain_data = hass.data.get(DOMAIN, {})
     if not domain_data:
         return None
 
     if requested_entry_id:
-        return requested_entry_id if requested_entry_id in domain_data else None
+        if requested_entry_id in _NON_ENTRY_KEYS:
+            return None
+        if requested_entry_id in domain_data and _is_entry_bucket(domain_data[requested_entry_id]):
+            return requested_entry_id
+        return None
 
-    # Fallback: first configured entry
-    return next(iter(domain_data.keys()), None)
+    # Fallback: first real config entry (skip service keys like webrtc_proxy/media_proxy)
+    for key, value in domain_data.items():
+        if key in _NON_ENTRY_KEYS:
+            continue
+        if _is_entry_bucket(value):
+            return key
+
+    return None
 
 
 def _find_last_call_sensor_entity_id(hass: HomeAssistant, entry_id: str | None) -> str | None:
@@ -100,7 +129,7 @@ async def async_setup_actions(hass: HomeAssistant) -> None:
             _LOGGER.error("No Domonap config entries are set up")
             raise HomeAssistantError("No Domonap config entries are set up")
 
-        api = hass.data[DOMAIN][entry_id].get(API)
+        api = _get_entry_api(hass, entry_id)
         if api is None:
             _LOGGER.error("Domonap API is not available for entry_id=%s", entry_id)
             raise HomeAssistantError(f"Domonap API is not available for entry_id={entry_id}")
@@ -122,7 +151,7 @@ async def async_setup_actions(hass: HomeAssistant) -> None:
             _LOGGER.error("No Domonap config entries are set up")
             raise HomeAssistantError("No Domonap config entries are set up")
 
-        api = hass.data[DOMAIN][entry_id].get(API)
+        api = _get_entry_api(hass, entry_id)
         if api is None:
             _LOGGER.error("Domonap API is not available for entry_id=%s", entry_id)
             raise HomeAssistantError(f"Domonap API is not available for entry_id={entry_id}")
@@ -142,7 +171,7 @@ async def async_setup_actions(hass: HomeAssistant) -> None:
         if not entry_id:
             return {"status": "error", "reason": "no_config_entries"}
 
-        api = hass.data[DOMAIN][entry_id].get(API)
+        api = _get_entry_api(hass, entry_id)
         if api is None:
             return {"status": "error", "reason": "api_unavailable", "config_entry_id": entry_id}
 
