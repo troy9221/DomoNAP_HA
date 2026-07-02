@@ -3,7 +3,7 @@ from typing import Optional, Callable
 from homeassistant.components.binary_sensor import BinarySensorEntity
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.event import async_call_later
-from .const import DOMAIN, API, EVENT_INCOMING_CALL, RESET_DELAY
+from .const import DOMAIN, API, EVENT_INCOMING_CALL, EVENT_CALL_ENDED, RESET_DELAY
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -70,6 +70,7 @@ class IntercomCallBinarySensor(BinarySensorEntity):
         self._state = False
         self._reset_timer: Optional[Callable[[], None]] = None
         self._listener = None
+        self._end_listener = None
 
     @property
     def unique_id(self):
@@ -102,10 +103,15 @@ class IntercomCallBinarySensor(BinarySensorEntity):
         self._listener = self._hass.bus.async_listen(
             EVENT_INCOMING_CALL, self._handle_incoming_call
         )
+        self._end_listener = self._hass.bus.async_listen(
+            EVENT_CALL_ENDED, self._handle_call_ended
+        )
 
     async def async_will_remove_from_hass(self):
         if self._listener:
             self._listener()
+        if self._end_listener:
+            self._end_listener()
         if self._reset_timer:
             self._reset_timer()
             self._reset_timer = None
@@ -126,6 +132,23 @@ class IntercomCallBinarySensor(BinarySensorEntity):
             self._reset_timer = async_call_later(
                 self._hass, RESET_DELAY, self._reset_state
             )
+
+    @callback
+    def _handle_call_ended(self, event):
+        door_id = event.data.get("DoorId")
+        # If DoorId is resolvable, only reset the matching sensor; otherwise reset any active call.
+        if door_id and door_id != self._door_id:
+            return
+        if not self._state:
+            return
+        _LOGGER.debug(
+            "Call ended for door %s (%s), resetting immediately", self._door_id, self._name
+        )
+        if self._reset_timer:
+            self._reset_timer()
+            self._reset_timer = None
+        self._state = False
+        self.async_write_ha_state()
 
     @callback
     def _reset_state(self, _now):

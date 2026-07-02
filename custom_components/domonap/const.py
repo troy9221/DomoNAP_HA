@@ -17,6 +17,7 @@ PARAM_DEVICE_TOKEN = "device_token"
 PARAM_INSTANCE_ID = "instance_id"
 PARAM_WEBRTC_PROXY_SECRET = "webrtc_proxy_secret"
 EVENT_INCOMING_CALL = "domonap_incoming_call"
+EVENT_CALL_ENDED = "domonap_call_ended"
 WEBRTC_PROXY = "webrtc_proxy"
 MEDIA_PROXY = "media_proxy"
 

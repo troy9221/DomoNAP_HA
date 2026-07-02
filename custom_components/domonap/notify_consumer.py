@@ -9,6 +9,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from .api import IntercomAPI
 from .const import (
     EVENT_INCOMING_CALL,
+    EVENT_CALL_ENDED,
     WS_MESSAGE_END,
     WS_HANDSHAKE_MESSAGE,
     WS_URL,
@@ -36,6 +37,8 @@ class IntercomNotifyConsumer:
         self._reconnect_delay: int = 1
         self._max_reconnect: int = 10
         self._stop_event = asyncio.Event()
+        # Map CallId -> DoorId to resolve DomofonCallEnded (which lacks DoorId).
+        self._active_calls: dict[str, str] = {}
         self._session = async_get_clientsession(hass)
         self._headers = {"Authorization": f"Bearer {self._api.access_token or ''}"}
         self._ws: Optional[aiohttp.ClientWebSocketResponse] = None
@@ -186,8 +189,14 @@ class IntercomNotifyConsumer:
                 evt = push_data.get("EventMessage")
                 if evt == "DomofonCalling":
                     await self._prepare_incoming_call_event(push_data)
+                    call_id = str(push_data.get("CallId", ""))
+                    door_id = push_data.get("DoorId")
+                    if call_id and door_id:
+                        self._active_calls[call_id] = door_id
                     self._hass.bus.fire(EVENT_INCOMING_CALL, push_data)
                     _LOGGER.debug("Incoming call: %s", push_data)
+                elif evt == "DomofonCallEnded":
+                    self._handle_call_ended(push_data)
                 else:
                     _LOGGER.debug("Unknown EventMessage=%s push=%s", evt, str(push_data)[:200])
         elif target in ('ReceiveOnline', "ReceiveOffline"):
@@ -217,6 +226,16 @@ class IntercomNotifyConsumer:
             _LOGGER.debug(f"Read confirm messages in channel {data.get('arguments')[0]}")
         else:
             _LOGGER.debug(f"Unknown target type {data.get('target')} message:\n{data}")
+
+    def _handle_call_ended(self, push_data: dict) -> None:
+        """Handle DomofonCallEnded: fire EVENT_CALL_ENDED with resolved DoorId."""
+        call_id = str(push_data.get("CallId", ""))
+        door_id = push_data.get("DoorId") or self._active_calls.pop(call_id, None)
+        event_data = dict(push_data)
+        if door_id:
+            event_data["DoorId"] = door_id
+        self._hass.bus.fire(EVENT_CALL_ENDED, event_data)
+        _LOGGER.debug("Call ended: call_id=%s door_id=%s", call_id, door_id)
 
     async def _prepare_incoming_call_event(self, push_data: dict) -> None:
         call_id = str(push_data.get("CallId", ""))
