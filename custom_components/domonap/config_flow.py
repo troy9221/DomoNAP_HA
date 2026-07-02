@@ -6,7 +6,7 @@ from typing import Any, Optional
 
 from .const import DOMAIN, CONF_COUNTRY_CODE, CONF_PHONE_NUMBER, CONF_CONFIRM_CODE, PARAM_REFRESH_EXPIRATION, \
     PARAM_REFRESH_TOKEN, PARAM_ACCESS_TOKEN, PARAM_WEBRTC_PROXY_SECRET, PARAM_DEVICE_TOKEN, PARAM_INSTANCE_ID
-from .api import IntercomAPI, is_android_guid
+from .api import IntercomAPI, is_fcm_like_token
 
 
 class IntercomFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
@@ -28,7 +28,7 @@ class IntercomFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         stored_device_token = entry_data.get(PARAM_DEVICE_TOKEN)
         self._api = IntercomAPI(
             device_token=(
-                stored_device_token if is_android_guid(stored_device_token) else None
+                stored_device_token if is_fcm_like_token(stored_device_token) else None
             ),
             instance_id=entry_data.get(PARAM_INSTANCE_ID),
         )

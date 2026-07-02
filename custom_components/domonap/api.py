@@ -2,7 +2,7 @@ import logging
 import aiohttp
 import asyncio
 from datetime import datetime, timezone
-from secrets import token_bytes
+from secrets import token_bytes, token_urlsafe
 from typing import Any, Callable, Dict, Optional, Union
 from uuid import UUID
 
@@ -57,7 +57,21 @@ def _generate_unique_android_guid() -> str:
 
 
 def _generate_device_token() -> str:
-    return _generate_unique_android_guid()
+    # Domonap маршрутизирует входящие звонки (push «DomofonCalling») по
+    # deviceToken, зарегистрированному через UpdateDeviceToken. И рабочий
+    # Telegram-бот, и ОФИЦИАЛЬНАЯ Postman-коллекция мобильного приложения
+    # используют токен в формате Firebase Cloud Messaging (FCM):
+    #     {22-символьный instance-id}:APA91b{~140 символов}
+    # «Голый» Android-GUID приводит к тому, что сервер не считает устройство
+    # push-совместимым и звонок уходит в GSM/телефонный режим вместо push.
+    return f"{token_urlsafe(22)}:APA91b{token_urlsafe(134)}"
+
+
+def is_fcm_like_token(value: Optional[str]) -> bool:
+    """True, если строка похожа на FCM device token ({id}:APA91b{...})."""
+    if not isinstance(value, str):
+        return False
+    return ":APA91b" in value and len(value) > 50
 
 
 def is_android_guid(value: Optional[str]) -> bool:

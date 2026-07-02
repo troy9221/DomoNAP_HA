@@ -72,15 +72,18 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    from .api import IntercomAPI, is_android_guid
+    from .api import IntercomAPI, is_fcm_like_token
     from .notify_consumer import IntercomNotifyConsumer
 
     hass.data[DOMAIN].setdefault(entry.entry_id, {})
 
     stored_device_token = entry.data.get(PARAM_DEVICE_TOKEN)
+    # Домофонные звонки маршрутизируются по deviceToken в формате FCM
+    # ({id}:APA91b{...}). Legacy-значения (Android-GUID) заменяем, иначе
+    # сервер не шлёт push «DomofonCalling».
     api = IntercomAPI(
         device_token=(
-            stored_device_token if is_android_guid(stored_device_token) else None
+            stored_device_token if is_fcm_like_token(stored_device_token) else None
         ),
         instance_id=entry.data.get(PARAM_INSTANCE_ID),
     )
@@ -88,9 +91,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     new_data = dict(entry.data)
     if not new_data.get(PARAM_WEBRTC_PROXY_SECRET):
         new_data[PARAM_WEBRTC_PROXY_SECRET] = token_urlsafe(24)
-    if not is_android_guid(new_data.get(PARAM_DEVICE_TOKEN)):
+    if not is_fcm_like_token(new_data.get(PARAM_DEVICE_TOKEN)):
         if new_data.get(PARAM_DEVICE_TOKEN):
-            _LOGGER.info("Replacing legacy Domonap DeviceToken with Android GUID")
+            _LOGGER.info(
+                "Replacing legacy Domonap DeviceToken with FCM-like token "
+                "(required for incoming-call push routing)"
+            )
         new_data[PARAM_DEVICE_TOKEN] = api.device_token
     if not new_data.get(PARAM_INSTANCE_ID):
         new_data[PARAM_INSTANCE_ID] = api.instance_id
@@ -149,6 +155,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     setup_complete = True
     entry.async_create_background_task(hass, consumer.start(), "domonap_notify")
+
+    # Перерегистрируем deviceToken на сервере при каждом старте. Иначе для уже
+    # авторизованного аккаунта новый (FCM-формат) токен остаётся только локально,
+    # и сервер продолжает слать звонки на старый/некорректный токен либо в GSM.
+    async def _register_device_token() -> None:
+        try:
+            ok = await api.update_device_token(api.device_token)
+            _LOGGER.debug("Startup UpdateDeviceToken result: %s", ok)
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.warning("Startup UpdateDeviceToken failed: %s", err)
+
+    entry.async_create_background_task(
+        hass, _register_device_token(), "domonap_register_device_token"
+    )
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
