@@ -53,9 +53,22 @@ class IntercomNotifyConsumer:
                 if e.status == 401:
                     _LOGGER.error("WS 401 Unauthorized: %s", e.headers.get("WWW-Authenticate"))
                 elif e.status == 404:
-                    _LOGGER.debug("WS 404 Not found")
+                    # Расширенная диагностика: печатаем URL запроса, сообщение и
+                    # заголовки ответа сервера, чтобы понять, почему хаб не найден.
+                    req = getattr(e, "request_info", None)
+                    _LOGGER.warning(
+                        "WS 404 Not found. request_url=%s message=%s response_headers=%s",
+                        getattr(req, "real_url", None) or getattr(req, "url", None),
+                        getattr(e, "message", None),
+                        dict(e.headers) if e.headers else None,
+                    )
                 else:
-                    _LOGGER.debug("WS handshake error: %s", e)
+                    _LOGGER.warning(
+                        "WS handshake error: status=%s message=%s headers=%s",
+                        getattr(e, "status", None),
+                        getattr(e, "message", None),
+                        dict(e.headers) if getattr(e, "headers", None) else None,
+                    )
             except Exception as e:
                 _LOGGER.debug("Notify loop error: %s", e)
             if self._stop_event.is_set():
@@ -97,6 +110,16 @@ class IntercomNotifyConsumer:
             raise RuntimeError("Negotiation failed: empty connectionToken")
         ws_url = WS_URL + self._notify_id_token
         self._headers["Authorization"] = f"Bearer {self._api.access_token or ''}"
+        # Диагностика хендшейка: печатаем итоговый URL и заголовки (токены
+        # маскируем, чтобы не светить их в логе).
+        _LOGGER.debug(
+            "WS connecting: url=%s headers=%s",
+            ws_url,
+            {
+                k: (v[:12] + "…(masked)" if k.lower() == "authorization" and v else v)
+                for k, v in self._headers.items()
+            },
+        )
         async with self._session.ws_connect(ws_url, headers=self._headers) as ws:
             self._ws = ws
             _LOGGER.debug("WS connected")

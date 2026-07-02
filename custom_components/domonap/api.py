@@ -573,32 +573,53 @@ class IntercomAPI:
 
     @staticmethod
     def _disambiguate_names(keys: list) -> None:
-        """Сделать отображаемые имена дверей уникальными (in-place).
+        """Сделать отображаемые имена дверей ГАРАНТИРОВАННО уникальными (in-place).
 
-        Разные двери (разный doorId) с одинаковым name сбиваются в UI в один
-        неразличимый пункт. Для каждой группы дублей добавляем к name суффикс:
-        сначала пробуем addressString, а если он пуст/не различает — короткий
-        хвост doorId. unique_id (door_id) не затрагивается.
+        Разные двери (разный doorId) с одинаковым именем сбиваются в UI в один
+        неразличимый пункт, из-за чего кнопки «путаются». Делаем имена
+        уникальными в два шага:
+
+        1. Для групп дублей по имени добавляем адрес (addressString) — так
+           двери одного адреса группируются, а двери с разных адресов
+           (двор/паркинг) визуально разделяются.
+        2. Если после этого остаются одинаковые имена (несколько дверей с
+           ОДНИМ именем И ОДНИМ адресом, напр. несколько «Тамбур-шлюз» по
+           одному адресу), к каждому такому имени добавляем стабильный хвост
+           doorId. Хвост детерминирован и не меняется между рестартами, поэтому
+           entity_id остаются стабильными.
+
+        unique_id сущностей (door_id) не затрагивается.
         """
-        # Группируем индексы ключей по имени.
+        def base_name(key: dict) -> str:
+            return (key.get("name") or "").strip()
+
+        # Шаг 1: группировка дублей по имени → добавляем адрес.
         by_name: dict[str, list[int]] = {}
         for idx, key in enumerate(keys):
-            name = (key.get("name") or "").strip()
-            by_name.setdefault(name, []).append(idx)
+            by_name.setdefault(base_name(key), []).append(idx)
 
         for name, indices in by_name.items():
             if len(indices) < 2:
-                continue  # имя уникально — суффикс не нужен
-
+                continue  # имя уже уникально
             for idx in indices:
                 key = keys[idx]
                 address = (key.get("addressString") or "").strip()
                 if address and address.lower() != name.lower():
-                    suffix = address
-                else:
-                    door_id = str(key.get("doorId") or key.get("id") or "")
-                    suffix = door_id[-4:] if door_id else "?"
-                key["name"] = f"{name} ({suffix})" if name else suffix
+                    key["name"] = f"{name} ({address})" if name else address
+
+        # Шаг 2: гарантия глобальной уникальности. Любое имя, которое всё ещё
+        # встречается более одного раза, дополняем хвостом doorId.
+        counts: dict[str, int] = {}
+        for key in keys:
+            cur = key.get("name") or ""
+            counts[cur] = counts.get(cur, 0) + 1
+
+        for key in keys:
+            cur = key.get("name") or ""
+            if counts.get(cur, 0) > 1:
+                door_id = str(key.get("doorId") or key.get("id") or "")
+                tail = door_id[-6:] if door_id else "?"
+                key["name"] = f"{cur} #{tail}" if cur else tail
 
     async def get_video_area(self):
         return await self._post(
@@ -887,6 +908,10 @@ class IntercomAPI:
         if isinstance(res, dict) and "error" in res and "status" in res:
             _LOGGER.debug("negotiate failed: %s", res)
             return None
+        # Полный ответ negotiate: показывает connectionId, connectionToken,
+        # availableTransports, negotiateVersion, url/accessToken (при redirect).
+        # Нужно, чтобы понять правильную форму WebSocket-подключения при WS 404.
+        _LOGGER.debug("negotiate response: %s", res)
         token = res.get("connectionToken")
         _LOGGER.debug("get_notify_id_token -> %s", token)
         return token
