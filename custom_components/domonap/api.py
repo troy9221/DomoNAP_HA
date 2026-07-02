@@ -955,3 +955,29 @@ class IntercomAPI:
         token = res.get("connectionToken")
         _LOGGER.debug("get_notify_id_token -> %s", token)
         return token
+
+    def get_notify_cookie_header(self) -> Optional[str]:
+        """Вернуть Cookie-заголовок с affinity-куками, выставленными сервером
+        на этапе negotiate.
+
+        notificationHub (SignalR) работает за балансировщиком со «липкой»
+        сессией: negotiate и последующий WebSocket-апгрейд ОБЯЗАНЫ попасть на
+        один и тот же backend, иначе connectionToken невалиден и сервер
+        отвечает 404. Сервер привязывает запросы cookie
+        'domonap-api-communication-affinity'. Negotiate выполняется на
+        API-сессии, а WS открывается на отдельной сессии HA, поэтому cookie не
+        передаётся автоматически — переносим её вручную.
+        """
+        session = self._session
+        if session is None:
+            return None
+        try:
+            from yarl import URL
+
+            cookies = session.cookie_jar.filter_cookies(URL(self.base_url))
+        except Exception:
+            _LOGGER.debug("Cannot read notify affinity cookies", exc_info=True)
+            return None
+        if not cookies:
+            return None
+        return "; ".join(f"{name}={morsel.value}" for name, morsel in cookies.items())

@@ -110,6 +110,19 @@ class IntercomNotifyConsumer:
             raise RuntimeError("Negotiation failed: empty connectionToken")
         ws_url = WS_URL + self._notify_id_token
         self._headers["Authorization"] = f"Bearer {self._api.access_token or ''}"
+        # SignalR за балансировщиком со «липкой» сессией: negotiate и WS-апгрейд
+        # должны попасть на один backend. Сервер помечает запросы cookie
+        # 'domonap-api-communication-affinity'. Negotiate идёт на API-сессии, а
+        # WS открываем на сессии HA, поэтому переносим affinity-cookie вручную —
+        # иначе WS уходит на другой backend и отвечает 404.
+        affinity_cookie = None
+        get_cookie = getattr(self._api, "get_notify_cookie_header", None)
+        if callable(get_cookie):
+            affinity_cookie = get_cookie()
+        if affinity_cookie:
+            self._headers["Cookie"] = affinity_cookie
+        else:
+            self._headers.pop("Cookie", None)
         # Диагностика хендшейка: печатаем итоговый URL и заголовки (токены
         # маскируем, чтобы не светить их в логе).
         _LOGGER.debug(
