@@ -26,4 +26,4 @@ RESET_DELAY = 10 # секунды
 
 WS_MESSAGE_END = "\x1e"
 WS_HANDSHAKE_MESSAGE = '{"protocol":"json","version":1}' + WS_MESSAGE_END
-WS_URL = "wss://api.domonap.ru/notificationHub/?id="
+WS_URL = "wss://api.domonap.ru/notificationHub?id="
