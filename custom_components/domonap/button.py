@@ -110,12 +110,14 @@ class IntercomDoor(ButtonEntity):
 
     @property
     def device_info(self):
+        # НЕ указываем via_device на самого себя (self._key_id) — иначе HA в UI
+        # пишет "Подключено через <это же устройство>". Дверь — самостоятельное
+        # устройство без родителя.
         info = {
             "identifiers": {(DOMAIN, self._key_id)},
             "name": self._name,
             "manufacturer": "Domonap",
             "model": "Intercom Device",
-            "via_device": (DOMAIN, self._key_id),
         }
         if self._address:
             info["suggested_area"] = self._address

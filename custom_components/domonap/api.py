@@ -379,8 +379,34 @@ class IntercomAPI:
         if isinstance(user, dict) and "error" not in user:
             profile = user.get("userProfile")
             if isinstance(profile, dict):
+                # Диагностика "Режима вызова" (Пуш-уведомление / Телефонный звонок).
+                # Если DoorOpen приходит по WS, а звонок домофона — нет, значит на
+                # аккаунте выбран режим "Телефонный звонок" и сервер шлёт GSM-вызов
+                # вместо push. Логируем поля профиля, чтобы найти нужный флаг.
+                self._log_call_mode_fields(user)
                 return profile.get("username")
         return None
+
+    @staticmethod
+    def _log_call_mode_fields(user: dict) -> None:
+        if not _LOGGER.isEnabledFor(logging.DEBUG):
+            return
+        keywords = ("call", "notif", "push", "phone", "sip", "voip", "mode", "type")
+
+        def _scan(prefix: str, obj: Any) -> None:
+            if isinstance(obj, dict):
+                for k, v in obj.items():
+                    key = f"{prefix}.{k}" if prefix else str(k)
+                    if isinstance(v, (dict, list)):
+                        _scan(key, v)
+                    elif any(w in str(k).lower() for w in keywords):
+                        _LOGGER.debug("Profile candidate field: %s = %r", key, v)
+            elif isinstance(obj, list):
+                for i, item in enumerate(obj):
+                    _scan(f"{prefix}[{i}]", item)
+
+        _LOGGER.debug("Full GetUser response: %s", user)
+        _scan("", user)
 
     async def get_paged_keys(self, per_page: int = 100, current_page: int = 1, keys_type="Main"):
         """Получить ключи по типу. keys_type может быть строкой ('Main') или числом (0, 1, 2...)."""
