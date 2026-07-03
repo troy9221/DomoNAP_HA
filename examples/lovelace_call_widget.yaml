@@ -1,0 +1,49 @@
+# =============================================================================
+# Виджет "Идёт звонок с домофона" для дашборда Home Assistant
+# =============================================================================
+#
+# Использует ТОЛЬКО встроенные карточки HA — плагины HACS НЕ нужны.
+# Карточка появляется на дашборде ТОЛЬКО во время звонка (binary_sensor = on)
+# и автоматически скрывается, когда звонок завершён.
+#
+# КАК ВСТАВИТЬ:
+#   Дашборд "Домофон" -> ⋮ -> "Редактировать панель мониторинга" ->
+#   "+ Добавить карточку" -> внизу "Показать код (YAML)" ->
+#   вставить блок НИЖЕ (начиная с "type: conditional") -> "Сохранить".
+#
+# ЗАМЕНИТЕ плейсхолдеры на entity_id/door_id вашей двери с камерой
+# (сверить можно через Разработчик -> Шаблоны и в логах интеграции):
+#   - binary_sensor.domofon_<your_door>_incoming_call
+#   - camera.<your_door>_camera
+#   - door_id: YOUR_DOOR_ID
+#
+# Если у вас несколько дверей с камерами — скопируйте весь блок и поменяйте
+# три значения (binary_sensor, camera, door_id) для каждой двери.
+# =============================================================================
+
+type: conditional
+conditions:
+  - entity: binary_sensor.domofon_your_door_incoming_call
+    state: "on"
+card:
+  type: vertical-stack
+  cards:
+    - type: markdown
+      content: |
+        ## 📞 Звонок в домофон
+    - type: picture-entity
+      entity: camera.your_door_camera
+      camera_view: live
+      show_state: false
+      show_name: false
+    - type: horizontal-stack
+      cards:
+        - type: button
+          name: Открыть дверь
+          icon: mdi:door-open
+          icon_height: 48px
+          tap_action:
+            action: call-service
+            service: domonap.open_relay_by_door_id
+            data:
+              door_id: YOUR_DOOR_ID

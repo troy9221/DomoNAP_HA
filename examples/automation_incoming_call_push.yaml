@@ -1,0 +1,128 @@
+# =============================================================================
+# Domonap: push-уведомление на телефон при звонке в домофон
+# =============================================================================
+# Что делает:
+#   1) Ловит событие интеграции `domonap_incoming_call` (входящий звонок).
+#   2) Шлёт actionable push на телефон через HA Companion с фото звонящего
+#      и двумя кнопками: «Открыть дверь» и «Игнорировать».
+#   3) По нажатию «Открыть дверь» вызывает сервис интеграции
+#      domonap.open_relay_by_door_id, передавая DoorId из самого звонка.
+#
+# ПЕРЕД ИСПОЛЬЗОВАНИЕМ:
+#   • Замени `notify.mobile_app_*` на своё реальное имя сервиса,
+#     если оно другое. Посмотреть можно в Инструменты разработчика → Действия →
+#     набери "notify.mobile_app".
+#   • Приложение Home Assistant Companion должно быть установлено и залогинено
+#     под тем же аккаунтом HA.
+#
+# КАК ПОДКЛЮЧИТЬ БЕЗ ПРАВКИ configuration.yaml:
+#   В стандартной установке HA в configuration.yaml уже есть строка
+#       automation: !include automations.yaml
+#   Значит файл automations.yaml уже подключён отдельно. Просто СКОПИРУЙ два
+#   блока ниже (начиная со строки "- id:") в КОНЕЦ файла automations.yaml
+#   (config/automations.yaml) и перезагрузи автоматизации:
+#   Инструменты разработчика → YAML → «Перезагрузить автоматизации».
+#   Комментарии копировать не обязательно. id должны остаться уникальными.
+#
+# ЗАМЕЧАНИЕ ПРО iPhone (iOS):
+#   Ключи channel/importance/ttl/priority — только для Android, на iOS они
+#   игнорируются (оставлены для совместимости). За приоритет на iOS отвечает
+#   блок push → interruption-level.
+#
+# КАК СДЕЛАТЬ, ЧТОБЫ ТЕЛЕФОН «ЗВОНИЛ» (и телефон, и HA работают одновременно):
+#   Родное приложение Domonap звонить не будет, пока интеграция HA
+#   перерегистрирует deviceToken (сервер шлёт звонок на ОДИН последний токен —
+#   им становится HA). Поэтому «звонок на телефоне» обеспечивает HA Companion:
+#   HA ловит вызов по WS и мгновенно шлёт СЮДА push. Ниже стоит
+#   interruption-level: critical — это громкий сигнал, который проходит даже
+#   через беззвучный режим и «Не беспокоить», максимально близко к звонку.
+#   ТРЕБУЕТСЯ РАЗРЕШЕНИЕ: в приложении Home Assistant на iPhone →
+#   Настройки (шестерёнка) → Уведомления → включить «Critical Notifications».
+#   Без этого разрешения critical-звук не сыграет (уведомление всё равно придёт).
+#
+# !!! ВАЖНО ПРО КАРТИНКУ И external_url (частая причина «телефон не звонит») !!!
+#   PhotoUrl/VideoPreview формируются интеграцией через media_proxy и берут
+#   адрес из настроек HA. Если в HA НЕ задан external_url, в ссылку попадает
+#   ВНУТРЕННИЙ адрес (напр. http://YOUR_INTERNAL_IP:8123/...), недоступный с
+#   телефона по сотовой сети. iOS перед показом уведомления пытается скачать
+#   картинку, не может — и уведомление может вообще не появиться.
+#   ЛЕЧИТСЯ так: в configuration.yaml задайте внешний адрес HA:
+#       homeassistant:
+#         external_url: "https://home-assistant.example.com"
+#         internal_url: "http://YOUR_INTERNAL_IP:8123"
+#   (порт 8123 должен быть проброшен наружу; путь media_proxy отдаётся без
+#   авторизации, поэтому картинка скачается с телефона). После правки —
+#   перезапуск Home Assistant.
+# =============================================================================
+
+# ---- 1. Уведомление о входящем звонке ---------------------------------------
+- id: domonap_incoming_call_push
+  alias: "Домофон: push-уведомление при звонке"
+  mode: single
+  trigger:
+    - platform: event
+      event_type: domonap_incoming_call
+  action:
+    - service: notify.mobile_app_your_phone   # <-- ваш телефон
+      data:
+        title: "🔔 Звонок в домофон"
+        message: "{{ trigger.event.data.Address | default('Входящий вызов') }}"
+        data:
+          # Фото звонящего (уже проксировано интеграцией через media_proxy).
+          # ВАЖНО: картинку подставляем ТОЛЬКО если это внешняя ссылка. Если в
+          # PhotoUrl оказался внутренний адрес (YOUR_INTERNAL_IP / 192.168.* /
+          # http без external_url), iOS не скачает её и уведомление может НЕ
+          # прийти — поэтому в таком случае шлём push вообще без картинки (телефон
+          # всё равно зазвонит). Чтобы фото появилось — задай external_url (см. шапку).
+          image: >-
+            {% set u = trigger.event.data.PhotoUrl | default('') %}
+            {% if u and 'YOUR_INTERNAL_IP' not in u and '192.168.' not in u %}{{ u }}{% endif %}
+          # Группировка/замена уведомления по конкретному звонку.
+          tag: "domonap_call_{{ trigger.event.data.CallId }}"
+          # --- iOS (iPhone): CRITICAL — звучит громко даже в беззвучном/ДНД ---
+          # Требует разрешения «Critical Notifications» в приложении HA (см. шапку).
+          # Если разрешение не дать — замени блок push на:
+          #   interruption-level: time-sensitive
+          #   sound: default
+          push:
+            interruption-level: critical
+            sound:
+              name: default
+              critical: 1
+              volume: 1.0
+          # --- Android: канал/приоритет (на iOS игнорируется) ---
+          channel: "Домофон"
+          importance: high
+          ttl: 0
+          priority: high
+          # Actionable-кнопки. door_id/call_id прокидываем в action_data,
+          # чтобы обработчик ниже знал, какую дверь открывать.
+          actions:
+            - action: "DOMONAP_OPEN_DOOR"
+              title: "🔓 Открыть дверь"
+              action_data:
+                door_id: "{{ trigger.event.data.DoorId }}"
+                call_id: "{{ trigger.event.data.CallId }}"
+            - action: "DOMONAP_IGNORE"
+              title: "Игнорировать"
+              destructive: true
+
+# ---- 2. Открытие двери по нажатию кнопки из уведомления ----------------------
+- id: domonap_open_door_from_push
+  alias: "Домофон: открыть дверь из push-уведомления"
+  mode: single
+  trigger:
+    - platform: event
+      event_type: mobile_app_notification_action
+      event_data:
+        action: "DOMONAP_OPEN_DOOR"
+  action:
+    - service: domonap.open_relay_by_door_id
+      data:
+        door_id: "{{ trigger.event.data.action_data.door_id }}"
+    # (необязательно) Подтверждение, что дверь открыта.
+    - service: notify.mobile_app_your_phone   # <-- ваш телефон
+      data:
+        message: "✅ Дверь открыта"
+        data:
+          tag: "domonap_call_{{ trigger.event.data.action_data.call_id }}"

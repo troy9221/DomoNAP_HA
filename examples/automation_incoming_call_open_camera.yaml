@@ -1,0 +1,70 @@
+# =============================================================================
+# Push-уведомление о звонке с домофона + тап по телу открывает камеру в HA
+# =============================================================================
+#
+# Отличие от базовой автоматизации:
+#   - Добавлен параметр data.url — при ТАПЕ ПО ТЕЛУ уведомления (не по кнопке)
+#     iOS/Android приложение HA откроет указанный дашборд (например, view с
+#     карточкой камеры домофона из lovelace_call_widget.yaml).
+#
+# Куда вставить:
+#   /var/lib/homeassistant/homeassistant/automations.yaml (добавить как элемент
+#   списка) или через UI: Настройки → Автоматизации → создать → "Редактировать
+#   в YAML" → вставить тело ниже.
+#
+# ЗАМЕНИТЕ при необходимости:
+#   - notify.mobile_app_your_phone — ваш сервис уведомления
+#   - url: /domofon-dashboard — путь YAML-дашборда "Домофон"
+#       (slug из configuration_lovelace_snippet.yaml -> domofon-dashboard).
+#       Если делали дашборд в UI-режиме — подставьте его URL из адресной строки.
+#   - YOUR_INTERNAL_IP / YOUR_EXTERNAL_IP — внутренний/внешний адрес сервера HA
+#       (для картинки на iOS вне дома). Лучше задать external_url и убрать replace.
+# =============================================================================
+
+- id: domonap_incoming_call_push
+  alias: "Domonap: звонок в домофон (push + открыть камеру)"
+  mode: single
+  trigger:
+    - platform: event
+      event_type: domonap_incoming_call
+  action:
+    - service: notify.mobile_app_your_phone
+      data:
+        title: "📞 {{ trigger.event.data.Title | default('Звонок с домофона') }}"
+        message: "{{ trigger.event.data.Address | default('Домофон') }}"
+        data:
+          # Тап по ТЕЛУ уведомления -> открыть дашборд "Домофон" с камерой.
+          url: "/domofon-dashboard"
+          # Картинка предпросмотра (подмена внутреннего IP на внешний для iOS).
+          image: >-
+            {{ trigger.event.data.PhotoUrl | default('')
+               | replace('YOUR_INTERNAL_IP', 'YOUR_EXTERNAL_IP') }}
+          # Кнопки действия (тап по КНОПКЕ, а не по телу).
+          actions:
+            - action: "DOMONAP_OPEN_DOOR"
+              title: "🔓 Открыть дверь"
+            - action: "DOMONAP_IGNORE"
+              title: "Игнорировать"
+              destructive: true
+          # Метаданные, чтобы обработчик знал, какую дверь открывать.
+          action_data:
+            door_id: "{{ trigger.event.data.DoorId }}"
+          push:
+            interruption-level: time-sensitive
+            sound:
+              name: default
+              critical: 0
+
+# --- Обработчик нажатия кнопки "Открыть дверь" из push ------------------------
+- id: domonap_open_door_from_push
+  alias: "Domonap: открыть дверь по нажатию из push"
+  mode: single
+  trigger:
+    - platform: event
+      event_type: mobile_app_notification_action
+      event_data:
+        action: "DOMONAP_OPEN_DOOR"
+  action:
+    - service: domonap.open_relay_by_door_id
+      data:
+        door_id: "{{ trigger.event.data.action_data.door_id }}"

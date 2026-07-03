@@ -1,0 +1,199 @@
+# =============================================================================
+# ПОЛНЫЙ automations.yaml для Domonap (пример)
+# =============================================================================
+# Скопируйте нужные блоки в ваш automations.yaml
+# (обычно /config/automations.yaml), затем:
+#   Настройки -> "Проверить конфигурацию" -> перезагрузить автоматизации
+#   (Инструменты разработчика -> YAML -> "Автоматизации" или полный рестарт).
+#
+# Единый современный синтаксис HA (triggers/conditions/actions).
+#
+# ЗАМЕНИТЕ плейсхолдеры на свои значения:
+#   device_tracker.your_phone        — ваш device_tracker (приложение HA Companion)
+#   notify.mobile_app_your_phone     — ваш сервис уведомлений
+#   zone.gate_1 / zone.gate_2 / ...  — ваши геозоны
+#   YOUR_DOOR_ID_*                   — door_id ваших дверей (Разработчик -> Шаблоны)
+#   YOUR_INTERNAL_IP / YOUR_EXTERNAL_IP — внутренний/внешний адрес HA
+# =============================================================================
+
+# =============================================================================
+# ГЕО-АВТОМАТИЗАЦИИ: вход в зону -> открыть соответствующую дверь
+# =============================================================================
+
+# zone.gate_1 -> Калитка 1
+- id: domonap_zone_kalitka_1
+  alias: 'Гео: калитка 1 → открыть Калитку 1'
+  description: ''
+  triggers:
+    - trigger: zone
+      entity_id: device_tracker.your_phone
+      zone: zone.gate_1
+      event: enter
+  conditions: []
+  actions:
+    - action: domonap.open_relay_by_door_id
+      data:
+        door_id: YOUR_DOOR_ID_GATE_1   # Калитка 1
+    - action: notify.mobile_app_your_phone
+      data:
+        title: 🚪 Калитка 1
+        message: Открываю Калитку 1 — ты рядом
+  mode: single
+
+# zone.entrance_1 -> Вход 1
+- id: domonap_zone_vhod_1
+  alias: 'Гео: вход 1 → открыть Вход 1'
+  description: ''
+  triggers:
+    - trigger: zone
+      entity_id: device_tracker.your_phone
+      zone: zone.entrance_1
+      event: enter
+  conditions: []
+  actions:
+    - action: domonap.open_relay_by_door_id
+      data:
+        door_id: YOUR_DOOR_ID_ENTRANCE_1   # Вход 1
+    - action: notify.mobile_app_your_phone
+      data:
+        title: 🚪 Вход 1
+        message: Открываю Вход 1 — ты рядом
+  mode: single
+
+# zone.gate_2 -> Калитка 2
+- id: domonap_zone_kalitka_2
+  alias: 'Гео: калитка 2 → открыть Калитку 2'
+  description: ''
+  triggers:
+    - trigger: zone
+      entity_id: device_tracker.your_phone
+      zone: zone.gate_2
+      event: enter
+  conditions: []
+  actions:
+    - action: domonap.open_relay_by_door_id
+      data:
+        door_id: YOUR_DOOR_ID_GATE_2   # Калитка 2
+    - action: notify.mobile_app_your_phone
+      data:
+        title: 🚪 Калитка 2
+        message: Открываю Калитку 2 — ты рядом
+  mode: single
+
+# zone.entrance_2 -> Вход 2
+- id: domonap_zone_vhod_2
+  alias: 'Гео: вход 2 → открыть Вход 2'
+  description: ''
+  triggers:
+    - trigger: zone
+      entity_id: device_tracker.your_phone
+      zone: zone.entrance_2
+      event: enter
+  conditions: []
+  actions:
+    - action: domonap.open_relay_by_door_id
+      data:
+        door_id: YOUR_DOOR_ID_ENTRANCE_2   # Вход 2
+    - action: notify.mobile_app_your_phone
+      data:
+        title: 🚪 Вход 2
+        message: Открываю Вход 2 — ты рядом
+  mode: single
+
+# zone.stairs_2 -> Лестница 2
+- id: domonap_zone_lestnica_2
+  alias: 'Гео: лестница 2 → открыть Лестницу 2'
+  description: ''
+  triggers:
+    - trigger: zone
+      entity_id: device_tracker.your_phone
+      zone: zone.stairs_2
+      event: enter
+  conditions: []
+  actions:
+    - action: domonap.open_relay_by_door_id
+      data:
+        door_id: YOUR_DOOR_ID_STAIRS_2   # Лестница 2
+    - action: notify.mobile_app_your_phone
+      data:
+        title: 🚪 Лестница 2
+        message: Открываю Лестницу 2 — ты рядом
+  mode: single
+
+# zone.stairs_1 -> Лестница 1
+- id: domonap_zone_lestnica_1
+  alias: 'Гео: лестница 1 → открыть Лестницу 1'
+  description: ''
+  triggers:
+    - trigger: zone
+      entity_id: device_tracker.your_phone
+      zone: zone.stairs_1
+      event: enter
+  conditions: []
+  actions:
+    - action: domonap.open_relay_by_door_id
+      data:
+        door_id: YOUR_DOOR_ID_STAIRS_1   # Лестница 1
+    - action: notify.mobile_app_your_phone
+      data:
+        title: 🚪 Лестница 1
+        message: Открываю Лестницу 1 — ты рядом
+  mode: single
+
+# =============================================================================
+# ЗВОНОК В ДОМОФОН: push с фото + открытие камеры/двери
+# =============================================================================
+
+# При входящем звонке -> push с превью, кнопкой открытия и переходом на дашборд
+- id: domonap_incoming_call_push
+  alias: 'Domonap: звонок в домофон (push + открыть камеру)'
+  description: ''
+  mode: single
+  triggers:
+    - trigger: event
+      event_type: domonap_incoming_call
+  conditions: []
+  actions:
+    - action: notify.mobile_app_your_phone
+      data:
+        title: "📞 {{ trigger.event.data.Title | default('Звонок с домофона') }}"
+        message: "{{ trigger.event.data.Address | default('Домофон') }}"
+        data:
+          # Тап по ТЕЛУ уведомления -> открыть дашборд "Домофон" с камерой.
+          url: "/domofon-dashboard"
+          # Превью (подмена внутреннего IP на внешний, чтобы грузилось на телефоне).
+          # Лучше задать external_url в configuration.yaml и убрать replace.
+          image: >-
+            {{ trigger.event.data.PhotoUrl | default('')
+               | replace('YOUR_INTERNAL_IP', 'YOUR_EXTERNAL_IP') }}
+          # Кнопки действия (тап по КНОПКЕ, а не по телу).
+          actions:
+            - action: "DOMONAP_OPEN_DOOR"
+              title: "🔓 Открыть дверь"
+            - action: "DOMONAP_IGNORE"
+              title: "Игнорировать"
+              destructive: true
+          # Метаданные — какую дверь открывать по нажатию кнопки.
+          action_data:
+            door_id: "{{ trigger.event.data.DoorId }}"
+          push:
+            interruption-level: time-sensitive
+            sound:
+              name: default
+              critical: 0
+
+# Обработчик нажатия кнопки "Открыть дверь" из push-уведомления
+- id: domonap_open_door_from_push
+  alias: 'Domonap: открыть дверь по нажатию из push'
+  description: ''
+  mode: single
+  triggers:
+    - trigger: event
+      event_type: mobile_app_notification_action
+      event_data:
+        action: "DOMONAP_OPEN_DOOR"
+  conditions: []
+  actions:
+    - action: domonap.open_relay_by_door_id
+      data:
+        door_id: "{{ trigger.event.data.action_data.door_id }}"
