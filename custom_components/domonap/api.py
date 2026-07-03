@@ -57,13 +57,6 @@ def _generate_unique_android_guid() -> str:
 
 
 def _generate_device_token() -> str:
-    # Domonap маршрутизирует входящие звонки (push «DomofonCalling») по
-    # deviceToken, зарегистрированному через UpdateDeviceToken. И рабочий
-    # Telegram-бот, и ОФИЦИАЛЬНАЯ Postman-коллекция мобильного приложения
-    # используют токен в формате Firebase Cloud Messaging (FCM):
-    #     {22-символьный instance-id}:APA91b{~140 символов}
-    # «Голый» Android-GUID приводит к тому, что сервер не считает устройство
-    # push-совместимым и звонок уходит в GSM/телефонный режим вместо push.
     return f"{token_urlsafe(22)}:APA91b{token_urlsafe(134)}"
 
 
@@ -115,7 +108,6 @@ class IntercomAPI:
         self._session: Optional[aiohttp.ClientSession] = None
         self._external_session: Optional[aiohttp.ClientSession] = None
         self._closed = False
-        # Кэш результата get_all_keys по фильтру: {filter: (timestamp, data)}
         self._keys_cache: Dict[str, tuple[float, dict]] = {}
         self._keys_cache_lock = asyncio.Lock()
 
@@ -393,10 +385,6 @@ class IntercomAPI:
         if isinstance(user, dict) and "error" not in user:
             profile = user.get("userProfile")
             if isinstance(profile, dict):
-                # Диагностика "Режима вызова" (Пуш-уведомление / Телефонный звонок).
-                # Если DoorOpen приходит по WS, а звонок домофона — нет, значит на
-                # аккаунте выбран режим "Телефонный звонок" и сервер шлёт GSM-вызов
-                # вместо push. Логируем поля профиля, чтобы найти нужный флаг.
                 self._log_call_mode_fields(user)
                 return profile.get("username")
         return None
@@ -586,12 +574,6 @@ class IntercomAPI:
         elif keys_filter == "passes":
             all_keys = [k for k in all_keys if self.is_pass_key(k)]
 
-        # Дизамбигуация одинаковых имён. В аккаунте встречаются РАЗНЫЕ двери
-        # (разный doorId) с идентичным именем — напр. дворовая «Калитка 1» и
-        # паркинговая «Калитка 1». В UASH они выглядят как дубликаты устройств,
-        # из-за чего кажется, что «второй» двери нет. Добавляем к дубликатам
-        # различающий суффикс: адрес, а если он не помогает — короткий хвост
-        # doorId. Это меняет только отображаемое имя, не трогая unique_id.
         self._disambiguate_names(all_keys)
 
         combined_data = {
@@ -647,8 +629,6 @@ class IntercomAPI:
                 if address and address.lower() != name.lower():
                     key["name"] = f"{name} ({address})" if name else address
 
-        # Шаг 2: гарантия глобальной уникальности. Любое имя, которое всё ещё
-        # встречается более одного раза, дополняем хвостом doorId.
         counts: dict[str, int] = {}
         for key in keys:
             cur = key.get("name") or ""
@@ -948,9 +928,6 @@ class IntercomAPI:
         if isinstance(res, dict) and "error" in res and "status" in res:
             _LOGGER.debug("negotiate failed: %s", res)
             return None
-        # Полный ответ negotiate: показывает connectionId, connectionToken,
-        # availableTransports, negotiateVersion, url/accessToken (при redirect).
-        # Нужно, чтобы понять правильную форму WebSocket-подключения при WS 404.
         _LOGGER.debug("negotiate response: %s", res)
         token = res.get("connectionToken")
         _LOGGER.debug("get_notify_id_token -> %s", token)
