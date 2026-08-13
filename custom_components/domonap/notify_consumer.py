@@ -10,6 +10,8 @@ from .api import IntercomAPI
 from .const import (
     EVENT_INCOMING_CALL,
     EVENT_CALL_ENDED,
+    EVENT_RECEIVE_MESSAGE,
+    EVENT_USER_STATUS_CHANGED,
     WS_HANDSHAKE_MESSAGE,
     WS_KEEPALIVE_INTERVAL,
     WS_PING_MESSAGE,
@@ -255,7 +257,7 @@ class IntercomNotifyConsumer:
 
             _LOGGER.debug("User %s is %s", user, status)
 
-            self._hass.bus.fire("domonap_user_status_changed", {
+            self._hass.bus.fire(EVENT_USER_STATUS_CHANGED, {
                 "user": user,
                 "status": status,
             })
@@ -273,7 +275,7 @@ class IntercomNotifyConsumer:
             if not isinstance(chat_data, dict):
                 _LOGGER.debug("ReceiveMessage without payload: %s", data)
                 return
-            self._hass.bus.fire("domonap_receive_message", chat_data)
+            self._hass.bus.fire(EVENT_RECEIVE_MESSAGE, chat_data)
             _LOGGER.debug(
                 "Received message from %s: %s",
                 chat_data.get("sender"),

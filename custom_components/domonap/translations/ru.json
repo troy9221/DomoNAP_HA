@@ -27,6 +27,17 @@
       }
     }
   },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Входящие звонки",
+        "description": "Сервер DomoNAP отправляет push о звонке только на один deviceToken. Если перехват включён, Home Assistant регистрирует свой токен, и приложение DomoNAP перестаёт звонить в фоне. Двери, камеры и раздел «Поддержка» в приложении работают в любом режиме. Home Assistant по-прежнему получает вызов по WebSocket.",
+        "data": {
+          "register_device_token": "Перехватывать входящие звонки в Home Assistant (приложение DomoNAP / бот перестанут звонить)"
+        }
+      }
+    }
+  },
   "entity": {
     "button": {
       "open_door": {
@@ -47,6 +58,9 @@
       },
       "last_call_door_id": {
         "name": "Door ID последнего звонка"
+      },
+      "last_message": {
+        "name": "Последнее сообщение чата"
       }
     },
     "camera": {

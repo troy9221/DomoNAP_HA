@@ -22,6 +22,7 @@ from .const import (
     PLATFORMS,
     UPDATE_COORDINATOR,
     WEBRTC_PROXY,
+    CONF_REGISTER_DEVICE_TOKEN,
 )
 
 if TYPE_CHECKING:
@@ -154,24 +155,35 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data[DOMAIN][entry.entry_id]["notify_consumer"] = consumer
 
     setup_complete = True
+    entry.async_on_unload(entry.add_update_listener(_async_reload_entry))
     entry.async_create_background_task(hass, consumer.start(), "domonap_notify")
 
-    # Перерегистрируем deviceToken на сервере при каждом старте. Иначе для уже
-    # авторизованного аккаунта новый (FCM-формат) токен остаётся только локально,
-    # и сервер продолжает слать звонки на старый/некорректный токен либо в GSM.
-    async def _register_device_token() -> None:
-        try:
-            ok = await api.update_device_token(api.device_token)
-            _LOGGER.debug("Startup UpdateDeviceToken result: %s", ok)
-        except Exception as err:  # noqa: BLE001
-            _LOGGER.warning("Startup UpdateDeviceToken failed: %s", err)
+    # FCM deviceToken — это маршрут входящего ЗВОНКА, не дверей и не чата.
+    # Если опция выключена, не перехватываем токен телефона: приложение DomoNAP
+    # продолжает звонить, а HA всё равно получает вызов по WebSocket.
+    if entry.options.get(CONF_REGISTER_DEVICE_TOKEN, True):
+        async def _register_device_token() -> None:
+            try:
+                ok = await api.update_device_token(api.device_token)
+                _LOGGER.debug("Startup UpdateDeviceToken result: %s", ok)
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.warning("Startup UpdateDeviceToken failed: %s", err)
 
-    entry.async_create_background_task(
-        hass, _register_device_token(), "domonap_register_device_token"
-    )
+        entry.async_create_background_task(
+            hass, _register_device_token(), "domonap_register_device_token"
+        )
+    else:
+        _LOGGER.info(
+            "Skipping UpdateDeviceToken: incoming calls stay on the last "
+            "official DomoNAP / bot device (HA still listens via WebSocket)"
+        )
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
+
+
+async def _async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    await hass.config_entries.async_reload(entry.entry_id)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
