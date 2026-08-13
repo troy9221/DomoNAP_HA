@@ -30,6 +30,7 @@ def _install_homeassistant_stub() -> None:
         BINARY_SENSOR = "binary_sensor"
         SENSOR = "sensor"
         IMAGE = "image"
+        UPDATE = "update"
 
     ha_const.Platform = Platform
     sys.modules.setdefault("homeassistant", ha)
@@ -113,6 +114,16 @@ def test_split_signalr_records_ignores_empty_chunks():
     assert const.split_signalr_records(const.WS_MESSAGE_END) == []
     assert const.split_signalr_records("") == []
     assert const.split_signalr_records("{}" + const.WS_MESSAGE_END) == ["{}"]
+
+
+def test_normalize_release_version():
+    _install_homeassistant_stub()
+    const = _load_module("domonap_const", CONST_PATH)
+    assert const.normalize_release_version("v1.3.18") == "1.3.18"
+    assert const.normalize_release_version("1.3.18") == "1.3.18"
+    assert const.normalize_release_version("  V2.0.0 ") == "2.0.0"
+    assert const.normalize_release_version(None) is None
+    assert const.normalize_release_version("") is None
 
 
 def test_fetch_keys_by_type_handles_non_dict_payload():

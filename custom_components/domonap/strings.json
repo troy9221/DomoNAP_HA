@@ -58,6 +58,11 @@
       "incoming_call_image": {
         "name": "Call photo"
       }
+    },
+    "update": {
+      "integration": {
+        "name": "Integration"
+      }
     }
   }
 }

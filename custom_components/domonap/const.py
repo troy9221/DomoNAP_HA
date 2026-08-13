@@ -3,6 +3,8 @@ from homeassistant.const import Platform
 
 DOMAIN = 'domonap'
 API = "api"
+GITHUB_REPO = "troy9221/DomoNAP_HA"
+GITHUB_RELEASES_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 CONF_COUNTRY_CODE = "country_code"
 CONF_PHONE_NUMBER = "phone_number"
 CONF_CONFIRM_CODE = "confirm_code"
@@ -17,8 +19,16 @@ EVENT_INCOMING_CALL = "domonap_incoming_call"
 EVENT_CALL_ENDED = "domonap_call_ended"
 WEBRTC_PROXY = "webrtc_proxy"
 MEDIA_PROXY = "media_proxy"
+UPDATE_COORDINATOR = "update_coordinator"
 
-PLATFORMS: list[Platform] = [Platform.BUTTON, Platform.CAMERA, Platform.BINARY_SENSOR, Platform.SENSOR, Platform.IMAGE]
+PLATFORMS: list[Platform] = [
+    Platform.BUTTON,
+    Platform.CAMERA,
+    Platform.BINARY_SENSOR,
+    Platform.SENSOR,
+    Platform.IMAGE,
+    Platform.UPDATE,
+]
 
 RESET_DELAY = 10 # секунды
 
@@ -44,3 +54,13 @@ def split_signalr_records(raw: str) -> list[str]:
     ReceivePush о входящем звонке теряется.
     """
     return [record for record in raw.split(WS_MESSAGE_END) if record]
+
+
+def normalize_release_version(value: str | None) -> str | None:
+    """Нормализовать tag GitHub-релиза к виду манифеста (`1.3.18`)."""
+    if not isinstance(value, str):
+        return None
+    version = value.strip()
+    if len(version) > 1 and version[0] in "vV" and version[1].isdigit():
+        version = version[1:]
+    return version or None

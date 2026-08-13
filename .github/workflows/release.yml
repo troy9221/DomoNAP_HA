@@ -1,0 +1,38 @@
+name: Release
+
+# HACS и панель обновлений HA сравнивают установленную версию с GitHub Release.
+# Тегов недостаточно — нужен именно published release.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - custom_components/domonap/manifest.json
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Publish GitHub release from manifest.json version
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION="$(jq -r .version custom_components/domonap/manifest.json)"
+          if [ -z "$VERSION" ] || [ "$VERSION" = "null" ]; then
+            echo "manifest.json has no version"
+            exit 1
+          fi
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            echo "Release $VERSION already exists"
+            exit 0
+          fi
+          gh release create "$VERSION" \
+            --title "Domonap $VERSION" \
+            --generate-notes \
+            --target "${GITHUB_SHA}"

@@ -8,7 +8,7 @@ from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import HomeAssistantError
 import homeassistant.helpers.config_validation as cv
 
-from .const import DOMAIN, API, WEBRTC_PROXY, MEDIA_PROXY
+from .const import DOMAIN, API, WEBRTC_PROXY, MEDIA_PROXY, UPDATE_COORDINATOR
 from .util import (
     INVALID_LAST_CALL_STATES,
     extract_phone_digits,
@@ -48,7 +48,7 @@ SERVICE_OPEN_RELAY_BY_LAST_CALL_DOOR_ID_SCHEMA = vol.Schema(
 
 
 # Service keys stored under hass.data[DOMAIN] that are NOT config entries.
-_NON_ENTRY_KEYS = frozenset({WEBRTC_PROXY, MEDIA_PROXY})
+_NON_ENTRY_KEYS = frozenset({WEBRTC_PROXY, MEDIA_PROXY, UPDATE_COORDINATOR})
 
 
 def _is_entry_bucket(value: Any) -> bool:
