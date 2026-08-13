@@ -18,20 +18,25 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
     api = hass.data[DOMAIN][config_entry.entry_id][API]
 
     response = await api.get_all_keys()
-    if isinstance(response, dict) and "error" in response:
+    if not isinstance(response, dict) or "error" in response:
         _LOGGER.error("Failed to load Domonap keys for image entities: %s", response)
         async_add_entities(entities, True)
         return
     keys = response.get("results", [])
 
     for key in keys:
+        if not isinstance(key, dict):
+            continue
         # создаём сущность только если есть стартовый превью-URL
         if key.get("videoPreview") is not None:
-            key_id: str = key["id"]
-            door_id: str = key["doorId"]
-            door_name: str = key["name"]
+            key_id = key.get("id")
+            door_id = key.get("doorId")
+            door_name = key.get("name")
+            photo_url = key.get("videoPreview")
+            if not key_id or not door_id or not door_name:
+                _LOGGER.debug("Skipping invalid Domonap image key payload: %s", key)
+                continue
             address: Optional[str] = key.get("addressString")
-            photo_url: str = key["videoPreview"]
 
             entities.append(
                 IntercomCallImageEntity(

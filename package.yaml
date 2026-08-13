@@ -6,7 +6,7 @@ description: Domonap intercom component
 files:
   - custom_components/domonap/__init__.py
   - custom_components/domonap/api.py
-  - custom_components/domonap/consts.py
+  - custom_components/domonap/const.py
   - custom_components/domonap/config_flow.py
   - custom_components/domonap/button.py
   - custom_components/domonap/camera.py

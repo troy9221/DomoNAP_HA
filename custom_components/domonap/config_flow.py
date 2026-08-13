@@ -32,6 +32,8 @@ class IntercomFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             ),
             instance_id=entry_data.get(PARAM_INSTANCE_ID),
         )
+        if self._country_code and self._phone_number:
+            await self.async_set_unique_id(f"{self._country_code}{self._phone_number}")
         return await self.async_step_reauth_confirm()
 
     async def async_step_reauth_confirm(self, user_input=None):
@@ -56,6 +58,9 @@ class IntercomFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             self._country_code = self._sanitize_number(user_input[CONF_COUNTRY_CODE])
             self._phone_number = self._sanitize_number(user_input[CONF_PHONE_NUMBER])
+
+            await self.async_set_unique_id(f"{self._country_code}{self._phone_number}")
+            self._abort_if_unique_id_configured()
 
             response = await self._send_authorization_code()
             if response is not True:
@@ -91,6 +96,7 @@ class IntercomFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                 errors["base"] = "confirmation_failed"
             else:
                 data = self._entry_data()
+                await self._api.close()
                 if self._reauth_entry is not None:
                     self.hass.config_entries.async_update_entry(
                         self._reauth_entry,

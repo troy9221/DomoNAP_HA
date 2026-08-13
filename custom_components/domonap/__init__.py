@@ -115,7 +115,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         refresh_token: Optional[str],
         refresh_expiration_date: Optional[str],
     ) -> None:
-        nonlocal setup_complete
         _LOGGER.debug("Updating entry tokens in config_entry data")
         new_data = dict(entry.data)
         new_data.setdefault(PARAM_DEVICE_TOKEN, api.device_token)

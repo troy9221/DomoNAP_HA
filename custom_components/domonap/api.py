@@ -1,6 +1,7 @@
 import logging
 import aiohttp
 import asyncio
+import time
 from datetime import datetime, timezone
 from secrets import token_bytes, token_urlsafe
 from typing import Any, Callable, Dict, Optional, Union
@@ -13,6 +14,8 @@ DEFAULT_DEVICE_PLATFORM = "Android"
 DEFAULT_DOM_APP = "mobile"
 DEFAULT_JSON_CONTENT_TYPE = "application/json; charset=UTF-8"
 DEFAULT_USER_AGENT = "okhttp/5.3.2"
+# User-Agent клиента Microsoft SignalR (Java, v8.0.6) для negotiate и WS-апгрейда.
+SIGNALR_USER_AGENT = "Microsoft SignalR/8.0 (8.0.6; Linux; Java; 0; The Android Project)"
 _ANDROID_GUID_RETRY_LIMIT = 8
 _GENERATED_ANDROID_GUIDS: set[str] = set()
 MAX_KEY_PAGES = 50
@@ -116,7 +119,9 @@ class IntercomAPI:
             raise RuntimeError("Client is closed")
         if not self._session or self._session.closed:
             timeout = aiohttp.ClientTimeout(total=30)
-            self._session = aiohttp.ClientSession(headers=self.headers, timeout=timeout)
+            # Не кладём API-заголовки в defaults сессии: иначе header_set
+            # (SignalR) не сможет убрать instanceId — aiohttp мержит defaults.
+            self._session = aiohttp.ClientSession(timeout=timeout)
         return self._session
 
     async def _ensure_external_session(self) -> aiohttp.ClientSession:
@@ -153,6 +158,19 @@ class IntercomAPI:
         if refresh_token:
             self._refresh_token_invalid = False
         self.headers.pop("Authorization", None)
+
+    def signalr_headers(self) -> Dict[str, str]:
+        """Заголовки для SignalR (negotiate + WebSocket-апгрейд).
+
+        В приложении hub использует отдельный HTTP-клиент: `dom-app` /
+        `dom-platform` и User-Agent Microsoft SignalR, без instanceId.
+        Авторизацию (Bearer) добавляет вызывающий код.
+        """
+        return {
+            "User-Agent": SIGNALR_USER_AGENT,
+            "dom-app": self.headers["dom-app"],
+            "dom-platform": self.headers["dom-platform"],
+        }
 
     def _parse_dt(self, val: str) -> Optional[datetime]:
         fmts = ("%Y-%m-%dT%H:%M:%S.%f%z", "%Y-%m-%dT%H:%M:%S%z")
@@ -244,6 +262,7 @@ class IntercomAPI:
         send_auth: Optional[bool] = None,
         expect: str = "json",
         retry_on_401: bool = True,
+        header_set: Optional[Dict[str, str]] = None,
     ) -> Union[Dict[str, Any], str]:
         if send_auth is None:
             send_auth = need_auth
@@ -251,7 +270,8 @@ class IntercomAPI:
             if self._refresh_token_invalid:
                 return self._refresh_unavailable_error("Session expired")
             if not self.access_token:
-                return {"error": "No access token available", "ok": False, "body": ""}
+                if not await self._refresh_for_retry(None):
+                    return {"error": "No access token available", "ok": False, "body": ""}
             if ensure_alive:
                 await self._ensure_alive()
             if not self.access_token:
@@ -261,35 +281,56 @@ class IntercomAPI:
         url = f"{self.base_url}{path}"
         first_try_access_token = self.access_token
 
-        async def _do() -> aiohttp.ClientResponse:
-            headers = dict(self.headers)
+        async def _once() -> Union[Dict[str, Any], str]:
+            headers = dict(self.headers if header_set is None else header_set)
             if payload is not None:
                 headers["Content-Type"] = DEFAULT_JSON_CONTENT_TYPE
             if send_auth and self.access_token:
                 headers["Authorization"] = f"Bearer {self.access_token}"
-            if payload is None:
-                return await session.post(url, headers=headers, ssl=False)
-            return await session.post(url, json=payload, headers=headers, ssl=False)
+            request_kwargs: Dict[str, Any] = {"headers": headers, "ssl": False}
+            if payload is not None:
+                request_kwargs["json"] = payload
+            async with session.post(url, **request_kwargs) as resp:
+                if 200 <= resp.status < 300:
+                    if expect == "json":
+                        try:
+                            return await resp.json(content_type=None)
+                        except Exception:
+                            body_text = await resp.text()
+                            return {
+                                "error": "Invalid JSON response",
+                                "ok": False,
+                                "status": resp.status,
+                                "body": body_text[:2000],
+                            }
+                    return await resp.text()
 
-        resp = await _do()
-        if resp.status == 401 and retry_on_401 and self.refresh_token:
+                body_text = ""
+                try:
+                    body_text = await resp.text()
+                except Exception:
+                    pass
+                err = {
+                    "error": f"HTTP {resp.status}",
+                    "status": resp.status,
+                    "body": body_text[:2000],
+                }
+                _LOGGER.error(
+                    "Request failed: POST %s payload=%s -> %s", path, payload, err
+                )
+                return err
+
+        result = await _once()
+        if (
+            retry_on_401
+            and self.refresh_token
+            and isinstance(result, dict)
+            and result.get("status") == 401
+        ):
             _LOGGER.warning("401 Unauthorized, refreshing token and retrying %s", path)
             if await self._refresh_for_retry(first_try_access_token):
-                resp = await _do()
-
-        if 200 <= resp.status < 300:
-            if expect == "json":
-                return await resp.json()
-            return await resp.text()
-
-        body_text = ""
-        try:
-            body_text = await resp.text()
-        except Exception:
-            pass
-        err = {"error": f"HTTP {resp.status}", "status": resp.status, "body": body_text[:2000]}
-        _LOGGER.error("Request failed: POST %s payload=%s -> %s", path, payload, err)
-        return err
+                result = await _once()
+        return result
 
     async def update_device_token(self, device_token: str) -> bool:
         _LOGGER.debug("UpdateDeviceToken start")
@@ -430,7 +471,15 @@ class IntercomAPI:
                 per_page=per_page, current_page=current_page, keys_type=keys_type
             )
 
-            if isinstance(keys_data, dict) and "error" in keys_data:
+            if not isinstance(keys_data, dict):
+                _LOGGER.debug(
+                    "Unexpected keys payload for type '%s': %s",
+                    type_label,
+                    type(keys_data).__name__,
+                )
+                return []
+
+            if "error" in keys_data:
                 _LOGGER.debug(
                     "Key type '%s' not supported: %s", type_label, keys_data.get("error")
                 )
@@ -479,8 +528,7 @@ class IntercomAPI:
         При старте HA каждая платформа вызывает get_all_keys независимо;
         чтобы не дёргать API 5+ раз, результат кэшируется на KEYS_CACHE_TTL.
         """
-        loop = asyncio.get_event_loop()
-        now = loop.time()
+        now = time.monotonic()
 
         cached = self._keys_cache.get(keys_filter)
         if cached is not None and (now - cached[0]) < KEYS_CACHE_TTL:
@@ -491,7 +539,7 @@ class IntercomAPI:
             # Повторная проверка после захвата блокировки: пока мы ждали,
             # другой вызов мог уже наполнить кэш.
             cached = self._keys_cache.get(keys_filter)
-            now = loop.time()
+            now = time.monotonic()
             if cached is not None and (now - cached[0]) < KEYS_CACHE_TTL:
                 _LOGGER.debug("Keys cache hit after lock (filter=%s)", keys_filter)
                 return cached[1]
@@ -499,7 +547,7 @@ class IntercomAPI:
             combined_data = await self._fetch_all_keys(keys_filter)
             # Кэшируем только успешный результат (без ошибок).
             if "error" not in combined_data:
-                self._keys_cache[keys_filter] = (loop.time(), combined_data)
+                self._keys_cache[keys_filter] = (time.monotonic(), combined_data)
             return combined_data
 
     async def _fetch_all_keys(self, keys_filter: str = "all") -> dict:
@@ -924,8 +972,13 @@ class IntercomAPI:
         return {"ok": True, "body": res}
 
     async def get_notify_id_token(self) -> Optional[str]:
-        res = await self._post("/notificationHub/negotiate?negotiateVersion=1", need_auth=True, expect="json")
-        if isinstance(res, dict) and "error" in res and "status" in res:
+        res = await self._post(
+            "/notificationHub/negotiate?negotiateVersion=1",
+            need_auth=True,
+            expect="json",
+            header_set=self.signalr_headers(),
+        )
+        if not isinstance(res, dict) or ("error" in res and "status" in res):
             _LOGGER.debug("negotiate failed: %s", res)
             return None
         _LOGGER.debug("negotiate response: %s", res)
