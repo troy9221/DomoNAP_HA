@@ -19,7 +19,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
     api = hass.data[DOMAIN][config_entry.entry_id][API]
 
     response = await api.get_all_keys()
-    if isinstance(response, dict) and "error" in response:
+    if not isinstance(response, dict) or "error" in response:
         _LOGGER.error("Failed to load Domonap keys for sensors: %s", response)
         async_add_entities(entities, True)
         return

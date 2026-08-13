@@ -3,16 +3,19 @@ import logging
 import asyncio
 import aiohttp
 from random import uniform
-from typing import Callable, Optional, Any, Iterable, Union
+from typing import Callable, Optional, Any, Union
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from .api import IntercomAPI
 from .const import (
     EVENT_INCOMING_CALL,
     EVENT_CALL_ENDED,
-    WS_MESSAGE_END,
     WS_HANDSHAKE_MESSAGE,
+    WS_KEEPALIVE_INTERVAL,
+    WS_PING_MESSAGE,
+    WS_SERVER_TIMEOUT,
     WS_URL,
+    split_signalr_records,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -40,10 +43,20 @@ class IntercomNotifyConsumer:
         # Map CallId -> DoorId to resolve DomofonCallEnded (which lacks DoorId).
         self._active_calls: dict[str, str] = {}
         self._session = async_get_clientsession(hass)
-        self._headers = {"Authorization": f"Bearer {self._api.access_token or ''}"}
+        self._headers = self._build_ws_headers()
         self._ws: Optional[aiohttp.ClientWebSocketResponse] = None
-        if hasattr(self._api, "token_update_callback") and self._api.token_update_callback is None:
-            self._api.token_update_callback = self._on_token_update
+        existing_callback = getattr(self._api, "token_update_callback", None)
+
+        def _on_token_update(
+            access: Optional[str],
+            refresh: Optional[str],
+            exp: Optional[str],
+        ) -> None:
+            self._headers["Authorization"] = f"Bearer {access or ''}"
+            if callable(existing_callback):
+                existing_callback(access, refresh, exp)
+
+        self._api.token_update_callback = _on_token_update
 
     async def start(self) -> None:
         self._stop_event.clear()
@@ -72,6 +85,8 @@ class IntercomNotifyConsumer:
                         getattr(e, "message", None),
                         dict(e.headers) if getattr(e, "headers", None) else None,
                     )
+            except (asyncio.TimeoutError, aiohttp.ServerTimeoutError):
+                _LOGGER.debug("WS server timeout, reconnecting")
             except Exception as e:
                 _LOGGER.debug("Notify loop error: %s", e)
             if self._stop_event.is_set():
@@ -98,13 +113,14 @@ class IntercomNotifyConsumer:
     def connected(self) -> bool:
         return self._connected
 
-    def _on_token_update(
-        self,
-        access: Optional[str],
-        _refresh: Optional[str],
-        _exp: Optional[str],
-    ) -> None:
-        self._headers["Authorization"] = f"Bearer {access or ''}"
+    def _build_ws_headers(self) -> dict[str, str]:
+        get_signalr_headers = getattr(self._api, "signalr_headers", None)
+        if callable(get_signalr_headers):
+            headers = dict(get_signalr_headers())
+        else:
+            headers = {}
+        headers["Authorization"] = f"Bearer {self._api.access_token or ''}"
+        return headers
 
     async def _connect_and_run(self) -> None:
         self._notify_id_token = await self._api.get_notify_id_token()
@@ -112,7 +128,7 @@ class IntercomNotifyConsumer:
         if not self._notify_id_token:
             raise RuntimeError("Negotiation failed: empty connectionToken")
         ws_url = WS_URL + self._notify_id_token
-        self._headers["Authorization"] = f"Bearer {self._api.access_token or ''}"
+        self._headers = self._build_ws_headers()
         # SignalR за балансировщиком со «липкой» сессией: negotiate и WS-апгрейд
         # должны попасть на один backend. Сервер помечает запросы cookie
         # 'domonap-api-communication-affinity'. Negotiate идёт на API-сессии, а
@@ -124,10 +140,6 @@ class IntercomNotifyConsumer:
             affinity_cookie = get_cookie()
         if affinity_cookie:
             self._headers["Cookie"] = affinity_cookie
-        else:
-            self._headers.pop("Cookie", None)
-        # Диагностика хендшейка: печатаем итоговый URL и заголовки (токены
-        # маскируем, чтобы не светить их в логе).
         _LOGGER.debug(
             "WS connecting: url=%s headers=%s",
             ws_url,
@@ -136,32 +148,67 @@ class IntercomNotifyConsumer:
                 for k, v in self._headers.items()
             },
         )
-        async with self._session.ws_connect(ws_url, headers=self._headers) as ws:
-            self._ws = ws
-            _LOGGER.debug("WS connected")
-            self._connected = True
-            self._reconnect_delay = 1
-            self._username = await self._api.get_username() or ""
-            await ws.send_str(WS_HANDSHAKE_MESSAGE)
-            async for msg in ws:
-                if self._stop_event.is_set():
+        ping_task: Optional[asyncio.Task] = None
+        try:
+            async with self._session.ws_connect(
+                ws_url,
+                headers=self._headers,
+                receive_timeout=WS_SERVER_TIMEOUT,
+            ) as ws:
+                self._ws = ws
+                _LOGGER.debug("WS connected")
+                self._connected = True
+                self._reconnect_delay = 1
+                self._username = await self._api.get_username() or ""
+                await ws.send_str(WS_HANDSHAKE_MESSAGE)
+                ping_task = asyncio.ensure_future(self._keepalive(ws))
+                try:
+                    async for msg in ws:
+                        if self._stop_event.is_set():
+                            break
+                        if msg.type == aiohttp.WSMsgType.TEXT:
+                            await self._handle_text(msg.data, ws)
+                            if self._callbacks:
+                                await self._publish_updates()
+                        elif msg.type == aiohttp.WSMsgType.PING:
+                            await ws.pong()
+                        elif msg.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
+                            _LOGGER.debug("WS closed/error: %s", msg.data)
+                            break
+                finally:
+                    if ping_task is not None:
+                        ping_task.cancel()
+        except (asyncio.TimeoutError, aiohttp.ServerTimeoutError):
+            _LOGGER.debug("WS server timeout, reconnecting")
+        finally:
+            self._connected = False
+            self._username = ""
+            self._ws = None
+            _LOGGER.debug("WS disconnected")
+
+    async def _keepalive(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+        """Периодически шлёт SignalR ping (`{"type":6}`).
+
+        Без этого сервер разрывает соединение по ClientTimeoutInterval, когда
+        нет входящих звонков/сообщений, и уведомления перестают приходить.
+        """
+        try:
+            while not ws.closed and not self._stop_event.is_set():
+                await asyncio.sleep(WS_KEEPALIVE_INTERVAL)
+                if ws.closed or self._stop_event.is_set():
                     break
-                if msg.type == aiohttp.WSMsgType.TEXT:
-                    await self._handle_text(msg.data, ws)
-                    if self._callbacks:
-                        await self._publish_updates()
-                elif msg.type == aiohttp.WSMsgType.PING:
-                    await ws.pong()
-                elif msg.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
-                    _LOGGER.debug("WS closed/error: %s", msg.data)
+                try:
+                    await ws.send_str(WS_PING_MESSAGE)
+                except Exception:
                     break
-        self._connected = False
-        self._username = ""
-        self._ws = None
-        _LOGGER.debug("WS disconnected")
+        except asyncio.CancelledError:
+            pass
 
     async def _handle_text(self, raw: str, ws: aiohttp.ClientWebSocketResponse) -> None:
-        payload = raw.rstrip(WS_MESSAGE_END)
+        for record in split_signalr_records(raw):
+            await self._handle_record(record, ws)
+
+    async def _handle_record(self, payload: str, ws: aiohttp.ClientWebSocketResponse) -> None:
         if payload == "{}":
             _LOGGER.debug("Handshake ack")
             return
@@ -174,7 +221,9 @@ class IntercomNotifyConsumer:
         if t == 1:
             await self._handle_invocation(data, ws)
         elif t == 6:
-            await ws.send_str(payload + WS_MESSAGE_END)
+            # Серверный ping. Клиент Microsoft SignalR его не эхоит — только
+            # сбрасывает serverTimeout и шлёт собственные ping по таймеру.
+            _LOGGER.debug("Server ping")
         elif t == 3:
             _LOGGER.debug("Completion frame: %s", data)
         else:
@@ -182,7 +231,8 @@ class IntercomNotifyConsumer:
 
     async def _handle_invocation(self, data: dict, ws: aiohttp.ClientWebSocketResponse) -> None:
         target = data.get("target")
-        args: Iterable = data.get("arguments") or []
+        raw_args = data.get("arguments") or []
+        args = list(raw_args) if isinstance(raw_args, (list, tuple)) else []
         if target == "ReceivePush":
             push_data = args[2] if len(args) >= 3 else None
             if isinstance(push_data, dict):
@@ -199,15 +249,15 @@ class IntercomNotifyConsumer:
                     self._handle_call_ended(push_data)
                 else:
                     _LOGGER.debug("Unknown EventMessage=%s push=%s", evt, str(push_data)[:200])
-        elif target in ('ReceiveOnline', "ReceiveOffline"):
-            user = data.get('arguments')[0]
-            status = data.get('target').replace('ReceiveO', 'o')
+        elif target in ("ReceiveOnline", "ReceiveOffline"):
+            user = args[0] if args else None
+            status = str(target).replace("ReceiveO", "o")
 
-            _LOGGER.debug(f"User {user} is {status}")
+            _LOGGER.debug("User %s is %s", user, status)
 
             self._hass.bus.fire("domonap_user_status_changed", {
-                'user': user,
-                'status': status
+                "user": user,
+                "status": status,
             })
             if user == self._username and status == "offline":
                 _LOGGER.debug(
@@ -219,13 +269,20 @@ class IntercomNotifyConsumer:
                     await ws.close()
 
         elif target == "ReceiveMessage":
-            chat_data = data.get('arguments')[0]
+            chat_data = args[0] if args else None
+            if not isinstance(chat_data, dict):
+                _LOGGER.debug("ReceiveMessage without payload: %s", data)
+                return
             self._hass.bus.fire("domonap_receive_message", chat_data)
-            _LOGGER.debug(f"Received message from {chat_data.get('sender')}: {chat_data.get('text')}")
-        elif target == 'ReceiveRead':
-            _LOGGER.debug(f"Read confirm messages in channel {data.get('arguments')[0]}")
+            _LOGGER.debug(
+                "Received message from %s: %s",
+                chat_data.get("sender"),
+                chat_data.get("text"),
+            )
+        elif target == "ReceiveRead":
+            _LOGGER.debug("Read confirm messages in channel %s", args[0] if args else None)
         else:
-            _LOGGER.debug(f"Unknown target type {data.get('target')} message:\n{data}")
+            _LOGGER.debug("Unknown target type %s message:\n%s", data.get("target"), data)
 
     def _handle_call_ended(self, push_data: dict) -> None:
         """Handle DomofonCallEnded: fire EVENT_CALL_ENDED with resolved DoorId."""

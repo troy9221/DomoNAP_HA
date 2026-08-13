@@ -20,6 +20,7 @@ from .const import (
     MEDIA_PROXY,
     PARAM_WEBRTC_PROXY_SECRET,
     PLATFORMS,
+    UPDATE_COORDINATOR,
     WEBRTC_PROXY,
 )
 
@@ -115,7 +116,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         refresh_token: Optional[str],
         refresh_expiration_date: Optional[str],
     ) -> None:
-        nonlocal setup_complete
         _LOGGER.debug("Updating entry tokens in config_entry data")
         new_data = dict(entry.data)
         new_data.setdefault(PARAM_DEVICE_TOKEN, api.device_token)
@@ -194,7 +194,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             _LOGGER.debug("Exception while closing API client", exc_info=True)
 
     hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
-    non_entry_keys = {WEBRTC_PROXY, MEDIA_PROXY}
+    non_entry_keys = {WEBRTC_PROXY, MEDIA_PROXY, UPDATE_COORDINATOR}
     remaining_entries = [
         key for key in hass.data.get(DOMAIN, {}) if key not in non_entry_keys
     ]

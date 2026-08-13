@@ -22,15 +22,20 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
 
     # Existing per-door buttons — use get_all_keys() to get ALL keys (all types, all pages)
     response = await api.get_all_keys()
-    if isinstance(response, dict) and "error" in response:
+    if not isinstance(response, dict) or "error" in response:
         _LOGGER.error("Failed to load Domonap keys for buttons: %s", response)
         async_add_entities(entities, True)
         return
     keys = response.get("results", [])
     for key in keys:
-        key_id = key["id"]
-        door_id = key["doorId"]
-        door_name = key["name"]
+        if not isinstance(key, dict):
+            continue
+        key_id = key.get("id")
+        door_id = key.get("doorId")
+        door_name = key.get("name")
+        if not key_id or not door_id or not door_name:
+            _LOGGER.debug("Skipping invalid Domonap button key payload: %s", key)
+            continue
         address = key.get("addressString")
         entities.append(IntercomDoor(api, key_id, door_id, door_name, address, key))
 
@@ -126,7 +131,7 @@ class IntercomDoor(ButtonEntity):
     async def async_press(self):
         try:
             response = await self._api.open_relay_by_key_id(self._key_id)
-            if response.get('ok') is not True:
-                _LOGGER.error(f"Failed to open the door {self._name}. Response: {response}")
-        except Exception as e:
-            _LOGGER.error(f"Error opening the door {self._name}: {e}")
+            if not isinstance(response, dict) or response.get("ok") is not True:
+                _LOGGER.error("Failed to open the door %s. Response: %s", self._name, response)
+        except Exception:
+            _LOGGER.exception("Error opening the door %s", self._name)

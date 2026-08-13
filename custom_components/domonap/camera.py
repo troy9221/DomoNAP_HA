@@ -297,10 +297,12 @@ class IntercomCamera(Camera):
         self._device_name = device_name or name
         self._device_model = device_model
         self._address = address
-        if preserve_via_device:
-            self._via_device_identifier = via_device_identifier or key_id
-        else:
-            self._via_device_identifier = None
+        via_id = via_device_identifier if preserve_via_device else None
+        # Не указываем via_device на само устройство — иначе HA пишет
+        # "Подключено через <это же устройство>".
+        if via_id == self._device_identifier:
+            via_id = None
+        self._via_device_identifier = via_id
 
     @property
     def extra_state_attributes(self):
