@@ -1,11 +1,23 @@
 from homeassistant import config_entries
+from homeassistant.core import callback
 import voluptuous as vol
 import re
 from secrets import token_urlsafe
 from typing import Any, Optional
 
-from .const import DOMAIN, CONF_COUNTRY_CODE, CONF_PHONE_NUMBER, CONF_CONFIRM_CODE, PARAM_REFRESH_EXPIRATION, \
-    PARAM_REFRESH_TOKEN, PARAM_ACCESS_TOKEN, PARAM_WEBRTC_PROXY_SECRET, PARAM_DEVICE_TOKEN, PARAM_INSTANCE_ID
+from .const import (
+    DOMAIN,
+    CONF_COUNTRY_CODE,
+    CONF_PHONE_NUMBER,
+    CONF_CONFIRM_CODE,
+    CONF_REGISTER_DEVICE_TOKEN,
+    PARAM_REFRESH_EXPIRATION,
+    PARAM_REFRESH_TOKEN,
+    PARAM_ACCESS_TOKEN,
+    PARAM_WEBRTC_PROXY_SECRET,
+    PARAM_DEVICE_TOKEN,
+    PARAM_INSTANCE_ID,
+)
 from .api import IntercomAPI, is_fcm_like_token
 
 
@@ -110,6 +122,7 @@ class IntercomFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                 return self.async_create_entry(
                     title= "+" + self._country_code + " " + self._phone_number,
                     data=data,
+                    options={CONF_REGISTER_DEVICE_TOKEN: True},
                 )
 
         data_schema = vol.Schema({
@@ -142,3 +155,27 @@ class IntercomFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             }
         )
         return data
+
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry):
+        return IntercomOptionsFlowHandler()
+
+
+class IntercomOptionsFlowHandler(config_entries.OptionsFlow):
+    """Настройки: перехватывать ли входящие звонки через FCM deviceToken."""
+
+    async def async_step_init(self, user_input=None):
+        if user_input is not None:
+            return self.async_create_entry(title="", data=user_input)
+
+        current = self.config_entry.options.get(CONF_REGISTER_DEVICE_TOKEN, True)
+        return self.async_show_form(
+            step_id="init",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_REGISTER_DEVICE_TOKEN, default=current): bool,
+                }
+            ),
+        )

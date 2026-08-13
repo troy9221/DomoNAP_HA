@@ -8,7 +8,7 @@ from homeassistant.components.sensor import SensorEntity
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.config_entries import ConfigEntry
 
-from .const import DOMAIN, API, EVENT_INCOMING_CALL
+from .const import DOMAIN, API, EVENT_INCOMING_CALL, EVENT_RECEIVE_MESSAGE
 from .util import extract_phone_digits
 
 _LOGGER = logging.getLogger(__name__)
@@ -21,9 +21,9 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
     response = await api.get_all_keys()
     if not isinstance(response, dict) or "error" in response:
         _LOGGER.error("Failed to load Domonap keys for sensors: %s", response)
-        async_add_entities(entities, True)
-        return
-    keys = response.get("results", [])
+        keys = []
+    else:
+        keys = response.get("results", [])
 
     for key in keys:
         try:
@@ -54,9 +54,9 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
         except Exception:
             _LOGGER.exception("Failed to create PIN sensor from key payload: %s", key)
 
-    # One per config entry: stores the last DoorId that rang.
     phone_digits = extract_phone_digits(config_entry)
     entities.append(DomonapLastCallDoorIdSensor(hass, config_entry.entry_id, phone_digits))
+    entities.append(DomonapLastMessageSensor(hass, config_entry.entry_id, phone_digits))
 
     async_add_entities(entities, True)
 
@@ -176,4 +176,74 @@ class DomonapLastCallDoorIdSensor(SensorEntity):
         attrs["ts"] = datetime.now(timezone.utc).isoformat()
 
         self._attrs = attrs
+        self.async_write_ha_state()
+
+
+class DomonapLastMessageSensor(SensorEntity):
+    """Последнее входящее сообщение чата / поддержки DomoNAP."""
+
+    _attr_has_entity_name = True
+    _attr_icon = "mdi:message-text"
+    _attr_translation_key = "last_message"
+    _attr_should_poll = False
+
+    def __init__(self, hass: HomeAssistant, entry_id: str, phone_digits: str | None):
+        self._hass = hass
+        self._entry_id = entry_id
+        self._phone_digits = phone_digits
+        self._state: str | None = None
+        self._attrs: dict[str, Any] = {}
+        self._unsub = None
+
+    @property
+    def device_info(self):
+        phone = self._phone_digits or self._entry_id
+        return {
+            "identifiers": {(DOMAIN, phone)},
+            "name": f"Domonap {phone}",
+            "manufacturer": "Domonap",
+            "model": "Domonap Account",
+        }
+
+    @property
+    def unique_id(self) -> str:
+        if self._phone_digits:
+            return f"{self._phone_digits}_last_message"
+        return f"{self._entry_id}_last_message"
+
+    @property
+    def suggested_object_id(self) -> str | None:
+        if self._phone_digits:
+            return f"{self._phone_digits}_last_message"
+        return None
+
+    @property
+    def native_value(self) -> str | None:
+        return self._state
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return self._attrs
+
+    async def async_added_to_hass(self) -> None:
+        self._unsub = self._hass.bus.async_listen(
+            EVENT_RECEIVE_MESSAGE, self._handle_message
+        )
+
+    async def async_will_remove_from_hass(self) -> None:
+        if self._unsub:
+            self._unsub()
+            self._unsub = None
+
+    @callback
+    def _handle_message(self, event) -> None:
+        data = dict(event.data or {})
+        text = data.get("text") or data.get("Text") or ""
+        sender = data.get("name") or data.get("sender") or data.get("channel") or ""
+        preview = str(text).strip() or str(sender).strip()
+        if not preview:
+            return
+        self._state = preview[:255]
+        data["ts"] = datetime.now(timezone.utc).isoformat()
+        self._attrs = data
         self.async_write_ha_state()

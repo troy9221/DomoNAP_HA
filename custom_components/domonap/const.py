@@ -5,9 +5,13 @@ DOMAIN = 'domonap'
 API = "api"
 GITHUB_REPO = "troy9221/DomoNAP_HA"
 GITHUB_RELEASES_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+GITHUB_RELEASES_LIST_URL = (
+    f"https://api.github.com/repos/{GITHUB_REPO}/releases?per_page=5"
+)
 CONF_COUNTRY_CODE = "country_code"
 CONF_PHONE_NUMBER = "phone_number"
 CONF_CONFIRM_CODE = "confirm_code"
+CONF_REGISTER_DEVICE_TOKEN = "register_device_token"
 
 PARAM_ACCESS_TOKEN = "access_token"
 PARAM_REFRESH_TOKEN = "refresh_token"
@@ -17,6 +21,8 @@ PARAM_INSTANCE_ID = "instance_id"
 PARAM_WEBRTC_PROXY_SECRET = "webrtc_proxy_secret"
 EVENT_INCOMING_CALL = "domonap_incoming_call"
 EVENT_CALL_ENDED = "domonap_call_ended"
+EVENT_RECEIVE_MESSAGE = "domonap_receive_message"
+EVENT_USER_STATUS_CHANGED = "domonap_user_status_changed"
 WEBRTC_PROXY = "webrtc_proxy"
 MEDIA_PROXY = "media_proxy"
 UPDATE_COORDINATOR = "update_coordinator"
@@ -64,3 +70,55 @@ def normalize_release_version(value: str | None) -> str | None:
     if len(version) > 1 and version[0] in "vV" and version[1].isdigit():
         version = version[1:]
     return version or None
+
+
+def _version_tuple(value: str) -> tuple[int, ...]:
+    parts: list[int] = []
+    for chunk in value.split("."):
+        digits = ""
+        for char in chunk:
+            if char.isdigit():
+                digits += char
+            else:
+                break
+        parts.append(int(digits) if digits else 0)
+    return tuple(parts)
+
+
+def is_newer_version(latest: str | None, installed: str | None) -> bool:
+    """True, если latest строго новее установленной версии."""
+    latest_norm = normalize_release_version(latest)
+    installed_norm = normalize_release_version(installed)
+    if not latest_norm:
+        return False
+    if not installed_norm:
+        return True
+    left = _version_tuple(latest_norm)
+    right = _version_tuple(installed_norm)
+    width = max(len(left), len(right))
+    left += (0,) * (width - len(left))
+    right += (0,) * (width - len(right))
+    return left > right
+
+
+def parse_github_release_payload(payload: object) -> dict | None:
+    """Достать объект релиза из /releases/latest или из списка /releases."""
+    if isinstance(payload, list):
+        for item in payload:
+            if (
+                isinstance(item, dict)
+                and not item.get("draft")
+                and not item.get("prerelease")
+            ):
+                return item
+        first = payload[0] if payload else None
+        return first if isinstance(first, dict) else None
+    if isinstance(payload, dict) and (
+        payload.get("tag_name") or payload.get("zipball_url")
+    ):
+        return payload
+    return None
+
+
+def github_tag_archive_url(tag: str) -> str:
+    return f"https://github.com/{GITHUB_REPO}/archive/refs/tags/{tag}.zip"

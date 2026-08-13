@@ -27,6 +27,17 @@
       }
     }
   },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Incoming calls",
+        "description": "DomoNAP delivers intercom call push to only one deviceToken. If capture is enabled, Home Assistant registers its token and the official app stops ringing in the background. Doors, cameras and Support chat in the app keep working either way. Home Assistant still receives calls over WebSocket.",
+        "data": {
+          "register_device_token": "Capture incoming calls in Home Assistant (official app / Telegram bot will stop ringing)"
+        }
+      }
+    }
+  },
   "entity": {
     "button": {
       "open_door": {
@@ -47,6 +58,9 @@
       },
       "last_call_door_id": {
         "name": "Last call Door ID"
+      },
+      "last_message": {
+        "name": "Last chat message"
       }
     },
     "camera": {

@@ -126,6 +126,74 @@ def test_normalize_release_version():
     assert const.normalize_release_version("") is None
 
 
+def test_is_newer_version():
+    _install_homeassistant_stub()
+    const = _load_module("domonap_const", CONST_PATH)
+    assert const.is_newer_version("1.3.19", "1.3.18")
+    assert const.is_newer_version("v1.3.19", "1.3.18")
+    assert const.is_newer_version("1.3.18", "1.3.9")
+    assert not const.is_newer_version("1.3.18", "1.3.18")
+    assert not const.is_newer_version("1.3.17", "1.3.18")
+    assert not const.is_newer_version(None, "1.3.18")
+    assert const.is_newer_version("1.3.19", None)
+
+
+def test_parse_github_release_payload():
+    _install_homeassistant_stub()
+    const = _load_module("domonap_const", CONST_PATH)
+    latest = {"tag_name": "1.3.19", "zipball_url": "https://example/zip"}
+    assert const.parse_github_release_payload(latest)["tag_name"] == "1.3.19"
+    listing = [
+        {"tag_name": "1.3.19-rc", "prerelease": True},
+        {"tag_name": "1.3.19", "draft": False, "prerelease": False},
+    ]
+    assert const.parse_github_release_payload(listing)["tag_name"] == "1.3.19"
+    assert const.parse_github_release_payload([]) is None
+    assert const.parse_github_release_payload("nope") is None
+
+
+def test_update_entity_declares_install_feature():
+    text = (ROOT / "custom_components" / "domonap" / "update.py").read_text()
+    assert "UpdateEntityFeature.INSTALL" in text
+    assert "timedelta(minutes=30)" in text
+
+
+def test_install_component_from_zip_replaces_integration(tmp_path):
+    import io
+    import zipfile
+
+    install = _load_module(
+        "domonap_release_install",
+        ROOT / "custom_components" / "domonap" / "release_install.py",
+    )
+    dest = tmp_path / "domonap"
+    dest.mkdir()
+    (dest / "old.py").write_text("old")
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as archive:
+        archive.writestr(
+            "DomoNAP_HA-1.3.19/custom_components/domonap/manifest.json",
+            '{"version": "1.3.19"}',
+        )
+        archive.writestr(
+            "DomoNAP_HA-1.3.19/custom_components/domonap/const.py",
+            "DOMAIN = 'domonap'\n",
+        )
+        archive.writestr("DomoNAP_HA-1.3.19/README.MD", "docs")
+        archive.writestr(
+            "DomoNAP_HA-1.3.19/custom_components/domonap/../../evil.txt",
+            "nope",
+        )
+    install.install_component_from_zip(buf.getvalue(), dest)
+
+    assert (dest / "manifest.json").read_text() == '{"version": "1.3.19"}'
+    assert (dest / "const.py").exists()
+    assert not (dest / "old.py").exists()
+    assert not (tmp_path / "evil.txt").exists()
+    assert not (tmp_path / ".domonap.bak").exists()
+
+
 def test_fetch_keys_by_type_handles_non_dict_payload():
     client = IntercomAPI()
 
