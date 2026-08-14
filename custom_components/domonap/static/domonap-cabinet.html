@@ -21,8 +21,10 @@
       touch-action: manipulation; }
     .ticket .go { margin-top: 8px; font-size: .9rem; color: #03a9f4; }
     .thread { margin: 8px 0 16px; }
-    .msg { padding: 10px 0; border-bottom: 1px solid #333; white-space: pre-wrap; }
-    .msg b { display: block; font-size: .85rem; opacity: .8; }
+    .msg { padding: 10px 12px; margin: 8px 0; border-radius: 12px; max-width: 92%; white-space: pre-wrap; }
+    .msg b { display: block; font-size: .85rem; opacity: .8; margin-bottom: 4px; }
+    .msg.me { margin-left: auto; background: #1e3a4c; text-align: right; }
+    .msg.them { margin-right: auto; background: #222; border: 1px solid #03a9f4; }
     .status { margin-top: 8px; font-size: .95rem; }
     .error { color: #ff6b6b; }
     .faces { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; }
@@ -91,12 +93,32 @@
       if (id && lastId && id === lastId && lastMsgs.length) return lastMsgs;
       return fallbackMsgs(t);
     }
+    function isSupportMsg(m) {
+      if (!m || typeof m !== "object") return false;
+      const flag = m.isSupport ?? m.fromSupport ?? m.isIncoming ?? m.IsIncoming ?? m.isOperator;
+      if (flag === true || flag === "true" || flag === 1) return true;
+      const who = String(
+        m.nameCreatedBy || m.NameCreatedBy || m.createdBy || m.CreatedBy ||
+        m.senderName || m.operatorName || m.authorName || m.name || ""
+      );
+      return /поддержк|оператор|сотрудник|support|operator|domonap|agent/i.test(who);
+    }
+    function senderLabel(m) {
+      if (!isSupportMsg(m)) return "Вы";
+      const who = String(
+        m.nameCreatedBy || m.NameCreatedBy || m.senderName || m.operatorName ||
+        m.authorName || m.name || ""
+      ).trim();
+      if (who && !/^вы$/i.test(who)) return who;
+      return "Поддержка";
+    }
     function renderMsgs(msgs) {
       if (!msgs || !msgs.length) return "<p class='hint'>Сообщений пока нет. Напишите ответ ниже.</p>";
       return msgs.map((m) => {
         const text = (m && (m.text || m.message || m.content)) || "";
-        const name = (m && (m.name || m.senderName)) || (m && m.isSupport ? "Поддержка" : "Вы");
-        return `<div class="msg"><b>${esc(name)}</b>${esc(text)}</div>`;
+        const support = isSupportMsg(m);
+        const name = senderLabel(m);
+        return `<div class="msg ${support ? "them" : "me"}"><b>${esc(name)}</b>${esc(text)}</div>`;
       }).join("");
     }
 

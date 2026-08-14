@@ -172,8 +172,11 @@ class DomonapCabinetCard extends HTMLElement {
       }
       thread.innerHTML = msgs.map((m) => {
         const text = m.text || m.message || m.content || "";
-        const name = m.name || m.senderName || (m.isSupport ? "Поддержка" : "Вы");
-        return `<div class="msg"><b>${this._esc(name)}</b>${this._esc(text)}</div>`;
+        const support = m.isSupport === true || m.isIncoming === true || /поддержк|оператор|support/i.test(String(m.nameCreatedBy || m.createdBy || m.name || ""));
+        const name = support
+          ? (m.nameCreatedBy || m.senderName || m.name || "Поддержка")
+          : "Вы";
+        return `<div class="msg ${support ? "them" : "me"}"><b>${this._esc(name)}</b>${this._esc(text)}</div>`;
       }).join("");
     } catch (err) {
       thread.innerHTML = `<p class="error">${this._esc(String(err))}</p>`;

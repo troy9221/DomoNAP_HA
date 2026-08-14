@@ -288,6 +288,21 @@ def test_normalize_ticket_messages():
     assert messages[0]["text"] == "Не открывается калитка"
     assert messages[1]["isSupport"] is True
     assert messages[1]["name"] == "Оператор"
+    incoming = api.normalize_ticket_messages(
+        {
+            "results": [
+                {"text": "Сломался домофон", "nameCreatedBy": "Житель"},
+                {"Text": "Мастер выехал", "NameCreatedBy": "Оператор", "IsIncoming": True},
+                {"text": "Ждём", "createdBy": "support"},
+            ]
+        }
+    )
+    assert incoming[0]["isSupport"] is False
+    assert incoming[0]["name"] == "Вы"
+    assert incoming[1]["isSupport"] is True
+    assert incoming[1]["name"] == "Оператор"
+    assert incoming[2]["isSupport"] is True
+    assert incoming[2]["name"] == "Поддержка"
     assert api.normalize_ticket_messages({"error": "HTTP 500", "status": 500}) == []
     assert api.normalize_ticket_messages(["коротко"])[0]["text"] == "коротко"
 

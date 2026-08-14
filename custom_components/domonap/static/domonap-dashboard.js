@@ -218,7 +218,7 @@
       cards: [
         {
           type: "iframe",
-          url: CABINET + "?mode=" + mode + "&v=1.4.0",
+          url: CABINET + "?mode=" + mode + "&v=1.4.1",
           tap_action: { action: "none" },
         },
       ],

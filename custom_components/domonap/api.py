@@ -165,6 +165,136 @@ def summarize_ticket(ticket: dict) -> dict:
     }
 
 
+_SUPPORT_NAME_MARKERS = (
+    "поддержк",
+    "оператор",
+    "сотрудник",
+    "support",
+    "operator",
+    "agent",
+    "domonap",
+    "admin",
+    "service",
+    "manager",
+)
+
+
+def _ci_value(item: dict, *names: str):
+    """Значение поля без учёта регистра ключа (text / Text / nameCreatedBy)."""
+    lookup = {str(key).lower(): value for key, value in item.items()}
+    for name in names:
+        if name.lower() in lookup:
+            return lookup[name.lower()]
+    return None
+
+
+def _truthy_flag(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and value in (0, 1):
+        return bool(value)
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in ("true", "1", "yes"):
+            return True
+        if lowered in ("false", "0", "no", ""):
+            return False
+    return None
+
+
+def _looks_like_support_name(value: Any) -> bool:
+    text = str(value or "").strip().lower()
+    return bool(text) and any(marker in text for marker in _SUPPORT_NAME_MARKERS)
+
+
+def _nested_author(item: dict) -> dict:
+    for key in ("author", "sender", "user", "createdByUser", "from"):
+        nested = _ci_value(item, key)
+        if isinstance(nested, dict):
+            return nested
+    return {}
+
+
+def _message_is_support(item: dict) -> bool:
+    """В APK автор — nameCreatedBy / createdBy, направление — isIncoming."""
+    from_me = _truthy_flag(
+        _ci_value(item, "isFromCurrentUser", "isMine", "isOwn", "own", "fromClient")
+    )
+    if from_me is True:
+        return False
+    if from_me is False:
+        return True
+
+    for key in (
+        "isSupport",
+        "fromSupport",
+        "isOperator",
+        "isIncoming",
+        "incoming",
+        "isEmployee",
+        "fromOperator",
+        "isAnswer",
+    ):
+        flag = _truthy_flag(_ci_value(item, key))
+        if flag is True:
+            return True
+
+    direction = str(
+        _ci_value(item, "direction", "side", "ticketMessageStatus") or ""
+    ).strip().lower()
+    if any(token in direction for token in ("incoming", "inbound", "support", "operator")):
+        return True
+    if direction in ("in", "left"):
+        return True
+
+    sender_type = str(
+        _ci_value(item, "senderType", "authorType", "messageType", "role", "channel") or ""
+    ).strip().lower()
+    if sender_type in ("text", "image", "file", "photo", "message"):
+        sender_type = ""
+    if _looks_like_support_name(sender_type) or sender_type in ("1", "2"):
+        return True
+    raw_type = _ci_value(item, "senderType", "authorType")
+    if raw_type in (1, 2):
+        return True
+
+    created_by = _ci_value(item, "createdBy", "created_by", "senderId")
+    name = _ci_value(
+        item,
+        "nameCreatedBy",
+        "senderName",
+        "operatorName",
+        "authorName",
+    )
+    if _looks_like_support_name(created_by) or _looks_like_support_name(name):
+        return True
+
+    nested = _nested_author(item)
+    if nested and nested is not item:
+        return _message_is_support(nested)
+    return False
+
+
+def _message_display_name(item: dict, is_support: bool) -> str:
+    nested = _nested_author(item)
+    name = _ci_value(
+        item,
+        "nameCreatedBy",
+        "senderName",
+        "operatorName",
+        "authorName",
+        "userName",
+    )
+    if not name and nested:
+        name = _ci_value(nested, "name", "fullName", "userName", "senderName")
+    if is_support:
+        label = str(name or "").strip()
+        if label:
+            return label[:80]
+        return "Поддержка"
+    return "Вы"
+
+
 def normalize_ticket_messages(payload: Any) -> list[dict]:
     """Привести GetTicketMessages / GetTicket к списку {text, name, isSupport, createdOn}."""
     items: list = []
@@ -204,36 +334,16 @@ def normalize_ticket_messages(payload: Any) -> list[dict]:
         if not isinstance(item, dict):
             continue
         text = (
-            item.get("text")
-            or item.get("message")
-            or item.get("content")
-            or item.get("body")
-            or item.get("ticketMessage")
+            _ci_value(
+                item, "text", "message", "content", "body", "ticketMessage"
+            )
             or ""
         )
         if isinstance(text, dict):
             text = text.get("text") or text.get("message") or ""
-        name = (
-            item.get("name")
-            or item.get("senderName")
-            or item.get("author")
-            or item.get("userName")
-            or item.get("operatorName")
-            or ""
-        )
-        is_support = item.get("isSupport")
-        if is_support is None:
-            is_support = bool(
-                item.get("fromSupport")
-                or item.get("isOperator")
-                or item.get("isIncoming")
-            )
-        created = (
-            item.get("createdOn")
-            or item.get("created")
-            or item.get("date")
-            or item.get("timestamp")
-        )
+        is_support = _message_is_support(item)
+        name = _message_display_name(item, is_support)
+        created = _ci_value(item, "createdOn", "created", "date", "timestamp")
         if not str(text).strip():
             continue
         messages.append(
@@ -1212,6 +1322,17 @@ class IntercomAPI:
         elif isinstance(payload, dict):
             _LOGGER.debug("GetTicketMessages(%s) keys=%s", ticket_id, list(payload.keys())[:20])
         messages = normalize_ticket_messages(payload)
+        if isinstance(payload, dict) and messages:
+            sample = None
+            items = extract_api_list(payload, "results", "items", "messages", "ticketMessages")
+            if items and isinstance(items[0], dict):
+                sample = list(items[0].keys())[:20]
+            _LOGGER.debug(
+                "GetTicketMessages(%s) parsed=%d sample_keys=%s",
+                ticket_id,
+                len(messages),
+                sample,
+            )
         if messages:
             return messages
         ticket_payload = await self.get_ticket(ticket_id)
