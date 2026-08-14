@@ -18,7 +18,7 @@ from .const import (
     PARAM_DEVICE_TOKEN,
     PARAM_INSTANCE_ID,
 )
-from .api import IntercomAPI, is_fcm_like_token
+from .api import IntercomAPI, is_api_error, is_fcm_like_token
 
 
 class IntercomFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
@@ -102,7 +102,7 @@ class IntercomFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                 or not self._api.refresh_token
                 or (
                     isinstance(response, dict)
-                    and ("errorText" in response or "error" in response)
+                    and (response.get("errorText") or is_api_error(response))
                 )
             ):
                 errors["base"] = "confirmation_failed"

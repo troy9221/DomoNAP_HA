@@ -10,6 +10,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
 
 from .const import ACCOUNT_COORDINATOR, DOMAIN, API, EVENT_INCOMING_CALL
+from .api import is_api_error
 from .util import extract_phone_digits
 
 _LOGGER = logging.getLogger(__name__)
@@ -20,7 +21,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
     api = hass.data[DOMAIN][config_entry.entry_id][API]
 
     response = await api.get_all_keys()
-    if not isinstance(response, dict) or "error" in response:
+    if not isinstance(response, dict) or is_api_error(response):
         _LOGGER.error("Failed to load Domonap keys for image entities: %s", response)
         keys = []
     else:
@@ -298,14 +299,16 @@ class DomonapFaceImageEntity(CoordinatorEntity, ImageEntity):
         return self._image_bytes
 
     def _handle_coordinator_update(self) -> None:
-        self.hass.async_create_task(self._refresh_image())
+        if self.hass:
+            self.hass.async_create_task(self._refresh_image())
         super()._handle_coordinator_update()
 
     async def _refresh_image(self) -> None:
+        if not self.hass:
+            return
         face = self._face()
         url = (face or {}).get("imageUrl")
         if not url or url == self._loaded_url:
-            self.async_write_ha_state()
             return
         response = await self.coordinator.api.fetch_external_bytes(url, authorized=True)
         if not response.get("ok"):

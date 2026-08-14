@@ -54,14 +54,11 @@ class DomonapAccountCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             else None
         )
         last_ticket_messages: list[dict[str, Any]] = []
-        for ticket in tickets[:15]:
-            ticket_id = str(ticket.get("ticketId") or ticket.get("id") or "")
-            if not ticket_id:
-                continue
-            conversation = await self.api.fetch_ticket_conversation(ticket_id)
-            ticket["messages"] = conversation
-            if ticket_id == last_ticket_id:
-                last_ticket_messages = conversation
+        if last_ticket_id:
+            last_ticket_messages = await self.api.fetch_ticket_conversation(
+                last_ticket_id
+            )
+            tickets[0]["messages"] = last_ticket_messages
         _LOGGER.debug(
             "Account snapshot: %d faces, %d tickets, %d messages",
             len(faces),

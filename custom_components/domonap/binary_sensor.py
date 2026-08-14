@@ -4,6 +4,7 @@ from homeassistant.components.binary_sensor import BinarySensorEntity
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.event import async_call_later
 from .const import DOMAIN, API, EVENT_INCOMING_CALL, EVENT_CALL_ENDED, RESET_DELAY
+from .api import is_api_error
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -21,7 +22,7 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
         async_add_entities(entities, True)
         return
 
-    if "error" in response:
+    if is_api_error(response):
         _LOGGER.error("Failed to load Domonap keys for call sensors: %s", response)
         async_add_entities(entities, True)
         return

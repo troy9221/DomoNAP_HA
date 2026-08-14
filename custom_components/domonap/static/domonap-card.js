@@ -86,7 +86,7 @@ class DomonapCabinetCard extends HTMLElement {
         <button class="cam">Сфотографировать</button>
         <button class="gal sec">Из галереи</button>
       </div>
-      <input class="cam-in" type="file" accept="image/*" capture="environment">
+      <input class="cam-in" type="file" accept="image/*" capture="user">
       <input class="gal-in" type="file" accept="image/*" multiple>
       <div class="status"></div>`;
   }
@@ -217,6 +217,7 @@ class DomonapCabinetCard extends HTMLElement {
       const data = await resp.json();
       if (!resp.ok || data.ok === false) throw new Error(data.error || data.errors || JSON.stringify(data));
       this._setStatus(`Добавлено фото: ${data.created}`);
+      setTimeout(() => this._refreshLists(), 2000);
     } catch (err) {
       this._setStatus(String(err), true);
     }

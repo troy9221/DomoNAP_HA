@@ -9,7 +9,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .api import summarize_ticket
+from .api import is_api_error, summarize_ticket
 from .const import ACCOUNT_COORDINATOR, DOMAIN, API, EVENT_INCOMING_CALL, EVENT_RECEIVE_MESSAGE
 from .util import extract_phone_digits
 
@@ -21,7 +21,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
     api = hass.data[DOMAIN][config_entry.entry_id][API]
 
     response = await api.get_all_keys()
-    if not isinstance(response, dict) or "error" in response:
+    if not isinstance(response, dict) or is_api_error(response):
         _LOGGER.error("Failed to load Domonap keys for sensors: %s", response)
         keys = []
     else:

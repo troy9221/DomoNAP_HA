@@ -9,9 +9,11 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 
 from .const import (
+    DASHBOARD_SETUP_FLAG,
     DASHBOARD_STRATEGY_TYPE,
     DASHBOARD_TITLE,
     DASHBOARD_URL_PATH,
+    DOMAIN,
     is_domonap_dashboard_config,
 )
 
@@ -47,9 +49,13 @@ async def async_setup_dashboard(hass: HomeAssistant) -> None:
         except Exception:
             _LOGGER.debug("Could not create Domonap Lovelace dashboard", exc_info=True)
 
+    domain_data = hass.data.setdefault(DOMAIN, {})
     if hass.is_running:
         await _run()
         return
+    if domain_data.get(DASHBOARD_SETUP_FLAG):
+        return
+    domain_data[DASHBOARD_SETUP_FLAG] = True
     hass.bus.async_listen_once("homeassistant_started", _run)
 
 
@@ -125,10 +131,9 @@ def _attach_storage_dashboard(hass: HomeAssistant, lovelace_data, item: dict[str
         "update": False,
     }
     try:
-        frontend.async_register_built_in_panel(
-            hass, "lovelace", show_in_sidebar=True, **kwargs
-        )
+        frontend.async_register_built_in_panel(hass, "lovelace", **kwargs)
     except TypeError:
+        kwargs.pop("update", None)
         frontend.async_register_built_in_panel(hass, "lovelace", **kwargs)
     except ValueError:
         _LOGGER.debug("Domonap dashboard panel already registered")

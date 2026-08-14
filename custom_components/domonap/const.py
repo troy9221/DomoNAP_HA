@@ -30,6 +30,8 @@ ACCOUNT_COORDINATOR = "account_coordinator"
 DASHBOARD_URL_PATH = "domonap-home"
 DASHBOARD_TITLE = "Домофон"
 DASHBOARD_STRATEGY_TYPE = "custom:domonap"
+DASHBOARD_SETUP_FLAG = "_dashboard_setup_scheduled"
+FACE_MAX_BYTES = 8 * 1024 * 1024
 
 
 def is_domonap_dashboard_config(config: object) -> bool:

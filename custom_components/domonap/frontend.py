@@ -9,13 +9,13 @@ from homeassistant.core import HomeAssistant
 
 from .actions import _require_entry_api, _refresh_account
 from .api import is_api_error
-from .const import DOMAIN
+from .const import FACE_MAX_BYTES
 from .dashboard import async_setup_dashboard
 
 _LOGGER = logging.getLogger(__name__)
 
 _JS_FILES = ("domonap-card.js", "domonap-dashboard.js")
-_JS_VERSION = "1.4.1"
+_JS_VERSION = "1.4.2"
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 
@@ -86,6 +86,9 @@ class DomonapFaceUploadView(HomeAssistantView):
 
         for index, (name, body, ctype) in enumerate(parts, start=1):
             filename = name if len(parts) == 1 else f"{index}_{name}"
+            if len(body) > FACE_MAX_BYTES:
+                errors.append(f"{filename}: файл больше 8 МБ")
+                continue
             res = await api.create_face(body, filename=filename, content_type=ctype)
             if is_api_error(res):
                 errors.append(f"{filename}: {res}")
