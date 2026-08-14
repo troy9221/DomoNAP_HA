@@ -61,6 +61,12 @@
       },
       "last_message": {
         "name": "Последнее сообщение чата"
+      },
+      "face_pass": {
+        "name": "Проход по лицу / аватару"
+      },
+      "support_tickets": {
+        "name": "Обращения в поддержку"
       }
     },
     "camera": {
@@ -71,6 +77,9 @@
     "image": {
       "incoming_call_image": {
         "name": "Фото звонка"
+      },
+      "face_image": {
+        "name": "Фото лица / аватара"
       }
     },
     "update": {

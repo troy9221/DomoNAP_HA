@@ -26,6 +26,7 @@ EVENT_USER_STATUS_CHANGED = "domonap_user_status_changed"
 WEBRTC_PROXY = "webrtc_proxy"
 MEDIA_PROXY = "media_proxy"
 UPDATE_COORDINATOR = "update_coordinator"
+ACCOUNT_COORDINATOR = "account_coordinator"
 
 PLATFORMS: list[Platform] = [
     Platform.BUTTON,

@@ -8,7 +8,8 @@ from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import HomeAssistantError
 import homeassistant.helpers.config_validation as cv
 
-from .const import DOMAIN, API, WEBRTC_PROXY, MEDIA_PROXY, UPDATE_COORDINATOR
+from .const import ACCOUNT_COORDINATOR, DOMAIN, API, WEBRTC_PROXY, MEDIA_PROXY, UPDATE_COORDINATOR
+from .api import is_api_error
 from .util import (
     INVALID_LAST_CALL_STATES,
     extract_phone_digits,
@@ -20,6 +21,12 @@ _LOGGER = logging.getLogger(__name__)
 SERVICE_OPEN_RELAY_BY_DOOR_ID = "open_relay_by_door_id"
 SERVICE_OPEN_RELAY_BY_KEY_ID = "open_relay_by_key_id"
 SERVICE_OPEN_RELAY_BY_LAST_CALL_DOOR_ID = "open_relay_by_last_call_door_id"
+SERVICE_SEND_SUPPORT_MESSAGE = "send_support_message"
+SERVICE_CREATE_SUPPORT_TICKET = "create_support_ticket"
+SERVICE_GET_SUPPORT_TICKETS = "get_support_tickets"
+SERVICE_GET_SUPPORT_TICKET_MESSAGES = "get_support_ticket_messages"
+SERVICE_CREATE_FACE = "create_face"
+SERVICE_DELETE_FACE = "delete_face"
 
 SERVICE_OPEN_RELAY_BY_DOOR_ID_SCHEMA = vol.Schema(
     {
@@ -46,6 +53,57 @@ SERVICE_OPEN_RELAY_BY_LAST_CALL_DOOR_ID_SCHEMA = vol.Schema(
     }
 )
 
+SERVICE_SEND_SUPPORT_MESSAGE_SCHEMA = vol.Schema(
+    {
+        vol.Required("text"): cv.string,
+        vol.Optional("ticket_id"): cv.string,
+        vol.Optional("config_entry_id"): cv.string,
+    }
+)
+
+SERVICE_CREATE_SUPPORT_TICKET_SCHEMA = vol.Schema(
+    {
+        vol.Required("text"): cv.string,
+        vol.Optional("property_id"): cv.string,
+        vol.Optional("theme_id"): cv.string,
+        vol.Optional("theme_header"): cv.string,
+        vol.Optional("address"): cv.string,
+        vol.Optional("support_help_type"): cv.string,
+        vol.Optional("support_help_suggestion_id"): cv.string,
+        vol.Optional("activation_code"): cv.string,
+        vol.Optional("config_entry_id"): cv.string,
+    }
+)
+
+SERVICE_GET_SUPPORT_TICKETS_SCHEMA = vol.Schema(
+    {
+        vol.Optional("search"): cv.string,
+        vol.Optional("config_entry_id"): cv.string,
+    }
+)
+
+SERVICE_GET_SUPPORT_TICKET_MESSAGES_SCHEMA = vol.Schema(
+    {
+        vol.Required("ticket_id"): cv.string,
+        vol.Optional("config_entry_id"): cv.string,
+    }
+)
+
+SERVICE_CREATE_FACE_SCHEMA = vol.Schema(
+    {
+        vol.Required("image_url"): cv.string,
+        vol.Optional("filename"): cv.string,
+        vol.Optional("config_entry_id"): cv.string,
+    }
+)
+
+SERVICE_DELETE_FACE_SCHEMA = vol.Schema(
+    {
+        vol.Required("image_id"): cv.string,
+        vol.Optional("config_entry_id"): cv.string,
+    }
+)
+
 
 # Service keys stored under hass.data[DOMAIN] that are NOT config entries.
 _NON_ENTRY_KEYS = frozenset({WEBRTC_PROXY, MEDIA_PROXY, UPDATE_COORDINATOR})
@@ -64,6 +122,45 @@ def _get_entry_api(hass: HomeAssistant, entry_id: str | None) -> Any:
     if not _is_entry_bucket(bucket):
         return None
     return bucket.get(API)
+
+
+def _get_account_coordinator(hass: HomeAssistant, entry_id: str | None) -> Any:
+    if not entry_id:
+        return None
+    bucket = hass.data.get(DOMAIN, {}).get(entry_id)
+    if not isinstance(bucket, dict):
+        return None
+    return bucket.get(ACCOUNT_COORDINATOR)
+
+
+async def _refresh_account(hass: HomeAssistant, entry_id: str | None) -> None:
+    coordinator = _get_account_coordinator(hass, entry_id)
+    if coordinator is not None:
+        await coordinator.async_request_refresh()
+
+
+def _require_entry_api(hass: HomeAssistant, requested_entry_id: str | None) -> tuple[str, Any]:
+    entry_id = _select_entry_id(hass, requested_entry_id)
+    if not entry_id:
+        raise HomeAssistantError("No Domonap config entries are set up")
+    api = _get_entry_api(hass, entry_id)
+    if api is None:
+        raise HomeAssistantError(f"Domonap API is not available for entry_id={entry_id}")
+    return entry_id, api
+
+
+def _guess_image_meta(url: str, filename: str | None) -> tuple[str, str]:
+    name = filename or url.rsplit("/", 1)[-1].split("?", 1)[0] or "face.jpg"
+    lower = name.lower()
+    if lower.endswith(".png"):
+        return name, "image/png"
+    if lower.endswith(".webp"):
+        return name, "image/webp"
+    if lower.endswith(".heic") or lower.endswith(".heif"):
+        return name, "image/heic"
+    if not lower.endswith((".jpg", ".jpeg")):
+        name = f"{name}.jpg" if "." not in name else name
+    return name, "image/jpeg"
 
 
 def _select_entry_id(hass: HomeAssistant, requested_entry_id: str | None) -> str | None:
@@ -213,6 +310,79 @@ async def async_setup_actions(hass: HomeAssistant) -> None:
             "response": result["response"],
         }
 
+    async def handle_send_support_message(call: ServiceCall) -> dict[str, Any]:
+        entry_id, api = _require_entry_api(hass, call.data.get("config_entry_id"))
+        res = await api.send_message_to_support(
+            call.data["text"],
+            ticket_id=call.data.get("ticket_id"),
+        )
+        if is_api_error(res) or (isinstance(res, dict) and res.get("ok") is False):
+            raise HomeAssistantError(f"Failed to send support message: {res}")
+        await _refresh_account(hass, entry_id)
+        return {"status": "ok", "config_entry_id": entry_id, "response": res}
+
+    async def handle_create_support_ticket(call: ServiceCall) -> dict[str, Any]:
+        entry_id, api = _require_entry_api(hass, call.data.get("config_entry_id"))
+        payload = {"text": call.data["text"]}
+        optional = {
+            "propertyId": call.data.get("property_id"),
+            "themeId": call.data.get("theme_id"),
+            "themeHeader": call.data.get("theme_header"),
+            "address": call.data.get("address"),
+            "supportHelpType": call.data.get("support_help_type"),
+            "supportHelpSuggestionId": call.data.get("support_help_suggestion_id"),
+            "activationCode": call.data.get("activation_code"),
+        }
+        payload.update({key: value for key, value in optional.items() if value})
+        res = await api.create_support_ticket(payload)
+        if is_api_error(res):
+            raise HomeAssistantError(f"Failed to create support ticket: {res}")
+        await _refresh_account(hass, entry_id)
+        return {"status": "ok", "config_entry_id": entry_id, "response": res}
+
+    async def handle_get_support_tickets(call: ServiceCall) -> dict[str, Any]:
+        entry_id, api = _require_entry_api(hass, call.data.get("config_entry_id"))
+        res = await api.get_paged_tickets(search=call.data.get("search") or "")
+        if is_api_error(res):
+            raise HomeAssistantError(f"Failed to load support tickets: {res}")
+        return {"status": "ok", "config_entry_id": entry_id, "response": res}
+
+    async def handle_get_support_ticket_messages(call: ServiceCall) -> dict[str, Any]:
+        entry_id, api = _require_entry_api(hass, call.data.get("config_entry_id"))
+        res = await api.get_ticket_messages(call.data["ticket_id"])
+        if is_api_error(res):
+            raise HomeAssistantError(f"Failed to load ticket messages: {res}")
+        return {"status": "ok", "config_entry_id": entry_id, "response": res}
+
+    async def handle_create_face(call: ServiceCall) -> dict[str, Any]:
+        entry_id, api = _require_entry_api(hass, call.data.get("config_entry_id"))
+        image_url = call.data["image_url"]
+        filename, content_type = _guess_image_meta(image_url, call.data.get("filename"))
+        downloaded = await api.fetch_external_bytes(image_url, authorized=True)
+        if not downloaded.get("ok"):
+            downloaded = await api.fetch_external_bytes(image_url, authorized=False)
+        if not downloaded.get("ok"):
+            raise HomeAssistantError(
+                f"Failed to download face image: {downloaded.get('error')}"
+            )
+        res = await api.create_face(
+            downloaded["body"],
+            filename=filename,
+            content_type=content_type,
+        )
+        if is_api_error(res):
+            raise HomeAssistantError(f"Failed to register face: {res}")
+        await _refresh_account(hass, entry_id)
+        return {"status": "ok", "config_entry_id": entry_id, "response": res}
+
+    async def handle_delete_face(call: ServiceCall) -> dict[str, Any]:
+        entry_id, api = _require_entry_api(hass, call.data.get("config_entry_id"))
+        res = await api.delete_face(call.data["image_id"])
+        if is_api_error(res):
+            raise HomeAssistantError(f"Failed to delete face: {res}")
+        await _refresh_account(hass, entry_id)
+        return {"status": "ok", "config_entry_id": entry_id, "response": res}
+
     hass.services.async_register(
         DOMAIN,
         SERVICE_OPEN_RELAY_BY_DOOR_ID,
@@ -236,6 +406,49 @@ async def async_setup_actions(hass: HomeAssistant) -> None:
         supports_response=True,
     )
 
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_SEND_SUPPORT_MESSAGE,
+        handle_send_support_message,
+        schema=SERVICE_SEND_SUPPORT_MESSAGE_SCHEMA,
+        supports_response=True,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_CREATE_SUPPORT_TICKET,
+        handle_create_support_ticket,
+        schema=SERVICE_CREATE_SUPPORT_TICKET_SCHEMA,
+        supports_response=True,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_GET_SUPPORT_TICKETS,
+        handle_get_support_tickets,
+        schema=SERVICE_GET_SUPPORT_TICKETS_SCHEMA,
+        supports_response=True,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_GET_SUPPORT_TICKET_MESSAGES,
+        handle_get_support_ticket_messages,
+        schema=SERVICE_GET_SUPPORT_TICKET_MESSAGES_SCHEMA,
+        supports_response=True,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_CREATE_FACE,
+        handle_create_face,
+        schema=SERVICE_CREATE_FACE_SCHEMA,
+        supports_response=True,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_DELETE_FACE,
+        handle_delete_face,
+        schema=SERVICE_DELETE_FACE_SCHEMA,
+        supports_response=True,
+    )
+
 
 async def async_unload_actions(hass: HomeAssistant) -> None:
     """Unregister Domonap actions (services)."""
@@ -243,6 +456,12 @@ async def async_unload_actions(hass: HomeAssistant) -> None:
         SERVICE_OPEN_RELAY_BY_DOOR_ID,
         SERVICE_OPEN_RELAY_BY_KEY_ID,
         SERVICE_OPEN_RELAY_BY_LAST_CALL_DOOR_ID,
+        SERVICE_SEND_SUPPORT_MESSAGE,
+        SERVICE_CREATE_SUPPORT_TICKET,
+        SERVICE_GET_SUPPORT_TICKETS,
+        SERVICE_GET_SUPPORT_TICKET_MESSAGES,
+        SERVICE_CREATE_FACE,
+        SERVICE_DELETE_FACE,
     ):
         try:
             hass.services.async_remove(DOMAIN, service)

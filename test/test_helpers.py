@@ -194,6 +194,44 @@ def test_install_component_from_zip_replaces_integration(tmp_path):
     assert not (tmp_path / ".domonap.bak").exists()
 
 
+def test_normalize_face_items():
+    payload = {
+        "faceImages": [
+            {"imageId": "abc", "imageUrl": "https://s3/a.jpg", "faceName": "Me"},
+            {"id": "def", "imageData": {"url": "https://s3/b.jpg"}},
+            "https://s3/c.jpg",
+        ]
+    }
+    faces = api.normalize_face_items(payload)
+    assert len(faces) == 3
+    assert faces[0]["imageId"] == "abc"
+    assert faces[0]["imageUrl"] == "https://s3/a.jpg"
+    assert faces[1]["imageId"] == "def"
+    assert faces[1]["imageUrl"] == "https://s3/b.jpg"
+    assert faces[2]["imageId"] == "https://s3/c.jpg"
+    assert api.normalize_face_items({"error": "HTTP 500", "status": 500}) == []
+
+
+def test_normalize_ticket_items():
+    payload = {
+        "results": [
+            {"id": "t1", "ticketStatus": "Open", "text": "Hello", "themeHeader": "Lift"},
+        ]
+    }
+    tickets = api.normalize_ticket_items(payload)
+    assert tickets[0]["ticketId"] == "t1"
+    summary = api.summarize_ticket(tickets[0])
+    assert summary["theme"] == "Lift"
+    assert summary["text"] == "Hello"
+    assert api.normalize_ticket_items({"error": "HTTP 401", "status": 401}) == []
+
+
+def test_is_api_error():
+    assert api.is_api_error({"error": "HTTP 401", "status": 401})
+    assert not api.is_api_error({"faceImages": []})
+    assert not api.is_api_error("ok")
+
+
 def test_fetch_keys_by_type_handles_non_dict_payload():
     client = IntercomAPI()
 

@@ -61,6 +61,12 @@
       },
       "last_message": {
         "name": "Last chat message"
+      },
+      "face_pass": {
+        "name": "Face / avatar pass"
+      },
+      "support_tickets": {
+        "name": "Support tickets"
       }
     },
     "camera": {
@@ -71,6 +77,9 @@
     "image": {
       "incoming_call_image": {
         "name": "Call photo"
+      },
+      "face_image": {
+        "name": "Face / avatar photo"
       }
     },
     "update": {

@@ -14,6 +14,8 @@ files:
   - custom_components/domonap/binary_sensor.py
   - custom_components/domonap/sensor.py
   - custom_components/domonap/image.py
+  - custom_components/domonap/coordinator.py
+  - custom_components/domonap/actions.py
 keywords:
   - domonap
   - intercom

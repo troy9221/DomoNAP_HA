@@ -7,8 +7,10 @@ from typing import Optional, Any
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN, API, EVENT_INCOMING_CALL, EVENT_RECEIVE_MESSAGE
+from .api import summarize_ticket
+from .const import ACCOUNT_COORDINATOR, DOMAIN, API, EVENT_INCOMING_CALL, EVENT_RECEIVE_MESSAGE
 from .util import extract_phone_digits
 
 _LOGGER = logging.getLogger(__name__)
@@ -57,6 +59,15 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
     phone_digits = extract_phone_digits(config_entry)
     entities.append(DomonapLastCallDoorIdSensor(hass, config_entry.entry_id, phone_digits))
     entities.append(DomonapLastMessageSensor(hass, config_entry.entry_id, phone_digits))
+
+    coordinator = hass.data[DOMAIN][config_entry.entry_id].get(ACCOUNT_COORDINATOR)
+    if coordinator is not None:
+        entities.append(
+            DomonapFacePassSensor(coordinator, config_entry.entry_id, phone_digits)
+        )
+        entities.append(
+            DomonapSupportTicketsSensor(coordinator, config_entry.entry_id, phone_digits)
+        )
 
     async_add_entities(entities, True)
 
@@ -247,3 +258,105 @@ class DomonapLastMessageSensor(SensorEntity):
         data["ts"] = datetime.now(timezone.utc).isoformat()
         self._attrs = data
         self.async_write_ha_state()
+
+
+def _account_device_info(phone_digits: str | None, entry_id: str) -> dict[str, Any]:
+    phone = phone_digits or entry_id
+    return {
+        "identifiers": {(DOMAIN, phone)},
+        "name": f"Domonap {phone}",
+        "manufacturer": "Domonap",
+        "model": "Domonap Account",
+    }
+
+
+class DomonapFacePassSensor(CoordinatorEntity, SensorEntity):
+    """Количество зарегистрированных лиц / аватаров для прохода."""
+
+    _attr_has_entity_name = True
+    _attr_icon = "mdi:face-recognition"
+    _attr_translation_key = "face_pass"
+    _attr_native_unit_of_measurement = None
+
+    def __init__(self, coordinator, entry_id: str, phone_digits: str | None):
+        super().__init__(coordinator)
+        self._entry_id = entry_id
+        self._phone_digits = phone_digits
+
+    @property
+    def device_info(self):
+        return _account_device_info(self._phone_digits, self._entry_id)
+
+    @property
+    def unique_id(self) -> str:
+        if self._phone_digits:
+            return f"{self._phone_digits}_face_pass"
+        return f"{self._entry_id}_face_pass"
+
+    @property
+    def suggested_object_id(self) -> str | None:
+        if self._phone_digits:
+            return f"{self._phone_digits}_face_pass"
+        return None
+
+    @property
+    def native_value(self) -> int:
+        return len(self.coordinator.faces)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        faces = []
+        for face in self.coordinator.faces:
+            faces.append(
+                {
+                    "imageId": face.get("imageId"),
+                    "imageUrl": face.get("imageUrl"),
+                    "faceName": face.get("faceName") or face.get("name"),
+                }
+            )
+        return {"faces": faces, "count": len(faces)}
+
+
+class DomonapSupportTicketsSensor(CoordinatorEntity, SensorEntity):
+    """Обращения в поддержку DomoNAP."""
+
+    _attr_has_entity_name = True
+    _attr_icon = "mdi:face-agent"
+    _attr_translation_key = "support_tickets"
+
+    def __init__(self, coordinator, entry_id: str, phone_digits: str | None):
+        super().__init__(coordinator)
+        self._entry_id = entry_id
+        self._phone_digits = phone_digits
+
+    @property
+    def device_info(self):
+        return _account_device_info(self._phone_digits, self._entry_id)
+
+    @property
+    def unique_id(self) -> str:
+        if self._phone_digits:
+            return f"{self._phone_digits}_support_tickets"
+        return f"{self._entry_id}_support_tickets"
+
+    @property
+    def suggested_object_id(self) -> str | None:
+        if self._phone_digits:
+            return f"{self._phone_digits}_support_tickets"
+        return None
+
+    @property
+    def native_value(self) -> int:
+        return len(self.coordinator.tickets)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        tickets = [summarize_ticket(ticket) for ticket in self.coordinator.tickets]
+        last = tickets[0] if tickets else None
+        return {
+            "tickets": tickets,
+            "count": len(tickets),
+            "last_ticket": last,
+            "last_ticket_id": (last or {}).get("ticketId"),
+        }
+

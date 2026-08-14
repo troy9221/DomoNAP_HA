@@ -49,3 +49,143 @@ open_relay_by_last_call_door_id:
       required: false
       selector:
         text:
+
+send_support_message:
+  name: Send support message
+  description: Sends a message to DomoNAP support chat or to an existing ticket.
+  fields:
+    text:
+      name: Message
+      description: Message text.
+      required: true
+      selector:
+        text:
+    ticket_id:
+      name: Ticket ID
+      description: Optional. If set, the message is added to this support ticket.
+      required: false
+      selector:
+        text:
+    config_entry_id:
+      name: Config entry id
+      description: Optional. Use when you have multiple Domonap accounts configured.
+      required: false
+      selector:
+        text:
+
+create_support_ticket:
+  name: Create support ticket
+  description: Creates a new DomoNAP support appeal/ticket.
+  fields:
+    text:
+      name: Message
+      description: Ticket text.
+      required: true
+      selector:
+        text:
+    property_id:
+      name: Property ID
+      required: false
+      selector:
+        text:
+    theme_id:
+      name: Theme ID
+      required: false
+      selector:
+        text:
+    theme_header:
+      name: Theme
+      required: false
+      selector:
+        text:
+    address:
+      name: Address
+      required: false
+      selector:
+        text:
+    support_help_type:
+      name: Support help type
+      required: false
+      selector:
+        text:
+    support_help_suggestion_id:
+      name: Support help suggestion id
+      required: false
+      selector:
+        text:
+    activation_code:
+      name: Activation code
+      required: false
+      selector:
+        text:
+    config_entry_id:
+      name: Config entry id
+      required: false
+      selector:
+        text:
+
+get_support_tickets:
+  name: Get support tickets
+  description: Returns the current list of DomoNAP support tickets.
+  fields:
+    search:
+      name: Search
+      required: false
+      selector:
+        text:
+    config_entry_id:
+      name: Config entry id
+      required: false
+      selector:
+        text:
+
+get_support_ticket_messages:
+  name: Get support ticket messages
+  description: Returns messages of a DomoNAP support ticket.
+  fields:
+    ticket_id:
+      name: Ticket ID
+      required: true
+      selector:
+        text:
+    config_entry_id:
+      name: Config entry id
+      required: false
+      selector:
+        text:
+
+create_face:
+  name: Register face / avatar
+  description: Uploads a photo for face/avatar door access (проход по лицу / аватару).
+  fields:
+    image_url:
+      name: Image URL
+      description: HTTP(S) URL of a face photo.
+      required: true
+      selector:
+        text:
+    filename:
+      name: Filename
+      required: false
+      selector:
+        text:
+    config_entry_id:
+      name: Config entry id
+      required: false
+      selector:
+        text:
+
+delete_face:
+  name: Delete face / avatar
+  description: Deletes a registered face/avatar photo by imageId.
+  fields:
+    image_id:
+      name: Image ID
+      required: true
+      selector:
+        text:
+    config_entry_id:
+      name: Config entry id
+      required: false
+      selector:
+        text:

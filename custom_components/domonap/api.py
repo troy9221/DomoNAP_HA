@@ -35,6 +35,86 @@ KEY_TYPES_ALL = (0, 1, 2, 3, 4, 5, 6)
 KEY_TYPES_DOORS = (0, 1, 2, 4, 5, 6)
 KEY_TYPES_PASSES = (3,)
 
+FACE_CREATE_PART_NAME = "faceFile"
+
+
+def extract_api_list(payload: Any, *keys: str) -> list:
+    """Достать список из ответа API (.NET часто кладёт его в results/items)."""
+    if isinstance(payload, list):
+        return [item for item in payload if item is not None]
+    if not isinstance(payload, dict) or "error" in payload:
+        return []
+    for key in keys:
+        value = payload.get(key)
+        if isinstance(value, list):
+            return [item for item in value if item is not None]
+    return []
+
+
+def is_api_error(payload: Any) -> bool:
+    return isinstance(payload, dict) and "error" in payload and "status" in payload
+
+
+def normalize_face_items(payload: Any) -> list[dict]:
+    """Привести GetFaces к списку {imageId, imageUrl, faceName, ...}."""
+    items = extract_api_list(payload, "faceImages", "results", "items", "faces")
+    faces: list[dict] = []
+    for item in items:
+        if isinstance(item, str):
+            if item:
+                faces.append({"imageId": item, "imageUrl": item})
+            continue
+        if not isinstance(item, dict):
+            continue
+        image_id = item.get("imageId") or item.get("id") or item.get("image_id")
+        nested = item.get("image") or item.get("imageData")
+        nested_url = nested.get("url") if isinstance(nested, dict) else None
+        image_url = (
+            item.get("imageUrl")
+            or item.get("url")
+            or item.get("photoUrl")
+            or nested_url
+            or (nested if isinstance(nested, str) else None)
+        )
+        face = dict(item)
+        if image_id:
+            face["imageId"] = str(image_id)
+        if image_url:
+            face["imageUrl"] = image_url
+        if image_id or image_url:
+            faces.append(face)
+    return faces
+
+
+def normalize_ticket_items(payload: Any) -> list[dict]:
+    """Привести GetPagedTickets к списку обращений поддержки."""
+    items = extract_api_list(payload, "results", "items", "tickets")
+    tickets: list[dict] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        ticket = dict(item)
+        ticket_id = item.get("id") or item.get("ticketId") or item.get("ticket_id")
+        if ticket_id:
+            ticket["id"] = str(ticket_id)
+            ticket["ticketId"] = str(ticket_id)
+        tickets.append(ticket)
+    return tickets
+
+
+def summarize_ticket(ticket: dict) -> dict:
+    """Короткое представление тикета для атрибутов сенсора."""
+    return {
+        "id": ticket.get("id") or ticket.get("ticketId"),
+        "ticketId": ticket.get("ticketId") or ticket.get("id"),
+        "status": ticket.get("ticketStatus") or ticket.get("status"),
+        "text": ticket.get("text") or ticket.get("message") or ticket.get("content"),
+        "theme": ticket.get("themeHeader") or ticket.get("theme") or ticket.get("title"),
+        "address": ticket.get("address") or ticket.get("addressString"),
+        "createdOn": ticket.get("createdOn") or ticket.get("created"),
+        "rating": ticket.get("rating"),
+    }
+
 
 def _with_app_header_suffix(value: str) -> str:
     return value if value.endswith(";") else f"{value};"
@@ -318,6 +398,75 @@ class IntercomAPI:
                 _LOGGER.error(
                     "Request failed: POST %s payload=%s -> %s", path, payload, err
                 )
+                return err
+
+        result = await _once()
+        if (
+            retry_on_401
+            and self.refresh_token
+            and isinstance(result, dict)
+            and result.get("status") == 401
+        ):
+            _LOGGER.warning("401 Unauthorized, refreshing token and retrying %s", path)
+            if await self._refresh_for_retry(first_try_access_token):
+                result = await _once()
+        return result
+
+    async def _post_multipart(
+        self,
+        path: str,
+        build_form,
+        *,
+        need_auth: bool = True,
+        retry_on_401: bool = True,
+        expect: str = "json",
+    ) -> Union[Dict[str, Any], str]:
+        """POST multipart/form-data. build_form() must return a fresh FormData."""
+        if need_auth:
+            if self._refresh_token_invalid:
+                return self._refresh_unavailable_error("Session expired")
+            if not self.access_token:
+                if not await self._refresh_for_retry(None):
+                    return {"error": "No access token available", "ok": False, "body": ""}
+            await self._ensure_alive()
+            if not self.access_token:
+                return self._refresh_unavailable_error("Session expired")
+
+        session = await self._ensure_session()
+        url = f"{self.base_url}{path}"
+        first_try_access_token = self.access_token
+
+        async def _once() -> Union[Dict[str, Any], str]:
+            headers = dict(self.headers)
+            headers.pop("Content-Type", None)
+            if self.access_token:
+                headers["Authorization"] = f"Bearer {self.access_token}"
+            form = build_form()
+            async with session.post(url, data=form, headers=headers, ssl=False) as resp:
+                if 200 <= resp.status < 300:
+                    if expect == "json":
+                        try:
+                            return await resp.json(content_type=None)
+                        except Exception:
+                            body_text = await resp.text()
+                            return {
+                                "error": "Invalid JSON response",
+                                "ok": False,
+                                "status": resp.status,
+                                "body": body_text[:2000],
+                            }
+                    return await resp.text()
+                body_text = ""
+                try:
+                    body_text = await resp.text()
+                except Exception:
+                    pass
+                err = {
+                    "error": f"HTTP {resp.status}",
+                    "status": resp.status,
+                    "body": body_text[:2000],
+                }
+                _LOGGER.error("Request failed: POST %s multipart -> %s", path, err)
                 return err
 
         result = await _once()
@@ -723,6 +872,152 @@ class IntercomAPI:
         return await self._post(
             "/client-api/CallLog/GetCallLogs",
             payload,
+            need_auth=True,
+            expect="json",
+        )
+
+    async def get_faces(self):
+        return await self._post(
+            "/client-api/Face/GetFaces",
+            need_auth=True,
+            expect="json",
+        )
+
+    async def create_face(
+        self,
+        image_bytes: bytes,
+        filename: str = "face.jpg",
+        content_type: str = "image/jpeg",
+        part_name: str = FACE_CREATE_PART_NAME,
+    ):
+        def _build_form():
+            form = aiohttp.FormData()
+            form.add_field(
+                part_name,
+                image_bytes,
+                filename=filename,
+                content_type=content_type,
+            )
+            return form
+
+        result = await self._post_multipart(
+            "/client-api/Face/CreateFace",
+            _build_form,
+            need_auth=True,
+            expect="json",
+        )
+        if is_api_error(result) and part_name == FACE_CREATE_PART_NAME:
+            # В APK встречаются и faceFile, и AvatarFile как имя multipart-части.
+            return await self.create_face(
+                image_bytes,
+                filename=filename,
+                content_type=content_type,
+                part_name="AvatarFile",
+            )
+        return result
+
+    async def delete_face(self, image_id: str):
+        return await self._post(
+            "/client-api/Face/DeleteFace",
+            {"imageId": image_id},
+            need_auth=True,
+            expect="json",
+        )
+
+    async def get_paged_tickets(
+        self,
+        search: str = "",
+        per_page: int = 20,
+        current_page: int = 1,
+    ):
+        payload = {
+            "search": search,
+            "currentPage": current_page,
+            "perPage": per_page,
+        }
+        return await self._post(
+            "/communication-api/Support/GetPagedTickets",
+            payload,
+            need_auth=True,
+            expect="json",
+        )
+
+    async def get_ticket(self, ticket_id: str):
+        return await self._post(
+            "/communication-api/Support/GetTicket",
+            {"ticketId": ticket_id},
+            need_auth=True,
+            expect="json",
+        )
+
+    async def get_ticket_messages(self, ticket_id: str):
+        return await self._post(
+            "/communication-api/Support/GetTicketMessages",
+            {"ticketId": ticket_id},
+            need_auth=True,
+            expect="json",
+        )
+
+    async def send_message_to_support(
+        self,
+        text: str,
+        ticket_id: Optional[str] = None,
+    ):
+        payload: Dict[str, Any] = {"text": text}
+        if ticket_id:
+            payload["ticketId"] = ticket_id
+        res = await self._post(
+            "/communication-api/Support/SendMessageToSupport",
+            payload,
+            need_auth=True,
+            expect="json",
+        )
+        if isinstance(res, dict) and "error" in res and "status" in res:
+            return res
+        if isinstance(res, dict):
+            res.setdefault("ok", True)
+            return res
+        return {"ok": True, "body": res}
+
+    async def create_support_ticket(self, payload: Dict[str, Any]):
+        return await self._post(
+            "/communication-api/Support/CreateTicket",
+            payload,
+            need_auth=True,
+            expect="json",
+        )
+
+    async def evaluate_support_ticket(
+        self,
+        ticket_id: str,
+        rating: Optional[int] = None,
+        comment: Optional[str] = None,
+    ):
+        payload: Dict[str, Any] = {"ticketId": ticket_id}
+        if rating is not None:
+            payload["rating"] = rating
+        if comment:
+            payload["comment"] = comment
+            payload["ratingComment"] = comment
+        return await self._post(
+            "/communication-api/Support/EvaluateTicketSupport",
+            payload,
+            need_auth=True,
+            expect="json",
+        )
+
+    async def set_ticket_returned(self, ticket_id: str):
+        return await self._post(
+            "/communication-api/Support/SetTicketReturned",
+            {"ticketId": ticket_id},
+            need_auth=True,
+            expect="json",
+        )
+
+    async def get_support_help_suggestions(self, payload: Optional[Dict[str, Any]] = None):
+        return await self._post(
+            "/communication-api/Support/GetSearchSupportHelpSuggestions",
+            payload or {},
             need_auth=True,
             expect="json",
         )

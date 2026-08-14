@@ -12,6 +12,7 @@ from homeassistant.exceptions import ConfigEntryAuthFailed
 from .const import (
     DOMAIN,
     API,
+    ACCOUNT_COORDINATOR,
     PARAM_ACCESS_TOKEN,
     PARAM_DEVICE_TOKEN,
     PARAM_INSTANCE_ID,
@@ -23,6 +24,7 @@ from .const import (
     UPDATE_COORDINATOR,
     WEBRTC_PROXY,
     CONF_REGISTER_DEVICE_TOKEN,
+    EVENT_RECEIVE_MESSAGE,
 )
 
 if TYPE_CHECKING:
@@ -153,6 +155,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     )
     hass.data[DOMAIN][entry.entry_id][API] = api
     hass.data[DOMAIN][entry.entry_id]["notify_consumer"] = consumer
+
+    from .coordinator import DomonapAccountCoordinator
+
+    coordinator = DomonapAccountCoordinator(hass, api)
+    hass.data[DOMAIN][entry.entry_id][ACCOUNT_COORDINATOR] = coordinator
+    await coordinator.async_config_entry_first_refresh()
+
+    async def _refresh_account_on_message(_event) -> None:
+        await coordinator.async_request_refresh()
+
+    entry.async_on_unload(
+        hass.bus.async_listen(EVENT_RECEIVE_MESSAGE, _refresh_account_on_message)
+    )
 
     setup_complete = True
     entry.async_on_unload(entry.add_update_listener(_async_reload_entry))

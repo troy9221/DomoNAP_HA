@@ -6,23 +6,25 @@ from typing import Optional, Callable
 from homeassistant.components.image import ImageEntity
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
 
-from .const import DOMAIN, API, EVENT_INCOMING_CALL
+from .const import ACCOUNT_COORDINATOR, DOMAIN, API, EVENT_INCOMING_CALL
+from .util import extract_phone_digits
 
 _LOGGER = logging.getLogger(__name__)
 
 
 async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, async_add_entities):
-    entities: list[IntercomCallImageEntity] = []
+    entities: list[ImageEntity] = []
     api = hass.data[DOMAIN][config_entry.entry_id][API]
 
     response = await api.get_all_keys()
     if not isinstance(response, dict) or "error" in response:
         _LOGGER.error("Failed to load Domonap keys for image entities: %s", response)
-        async_add_entities(entities, True)
-        return
-    keys = response.get("results", [])
+        keys = []
+    else:
+        keys = response.get("results", [])
 
     for key in keys:
         if not isinstance(key, dict):
@@ -52,6 +54,35 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
             )
 
     async_add_entities(entities, True)
+
+    coordinator = hass.data[DOMAIN][config_entry.entry_id].get(ACCOUNT_COORDINATOR)
+    if coordinator is None:
+        return
+
+    phone_digits = extract_phone_digits(config_entry)
+    known_face_ids: set[str] = set()
+
+    def _add_face_entities() -> None:
+        new_entities: list[DomonapFaceImageEntity] = []
+        for face in coordinator.faces:
+            image_id = str(face.get("imageId") or "")
+            if not image_id or image_id in known_face_ids:
+                continue
+            known_face_ids.add(image_id)
+            new_entities.append(
+                DomonapFaceImageEntity(
+                    hass,
+                    coordinator,
+                    config_entry.entry_id,
+                    phone_digits,
+                    image_id,
+                )
+            )
+        if new_entities:
+            async_add_entities(new_entities, True)
+
+    _add_face_entities()
+    config_entry.async_on_unload(coordinator.async_add_listener(_add_face_entities))
 
 
 class IntercomCallImageEntity(ImageEntity):
@@ -186,3 +217,104 @@ class IntercomCallImageEntity(ImageEntity):
 
         _LOGGER.debug("GET %s failed: %s", url, response.get("error"))
         return None
+
+
+class DomonapFaceImageEntity(CoordinatorEntity, ImageEntity):
+    """Фото зарегистрированного лица / аватара для прохода."""
+
+    _attr_has_entity_name = True
+    _attr_translation_key = "face_image"
+    _attr_content_type = "image/jpeg"
+
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        coordinator,
+        entry_id: str,
+        phone_digits: str | None,
+        image_id: str,
+    ):
+        CoordinatorEntity.__init__(self, coordinator)
+        ImageEntity.__init__(self, hass)
+        self._entry_id = entry_id
+        self._phone_digits = phone_digits
+        self._image_id = image_id
+        self._image_bytes: Optional[bytes] = None
+        self._loaded_url: Optional[str] = None
+
+    @property
+    def unique_id(self) -> str:
+        return f"{self._phone_digits or self._entry_id}_face_{self._image_id}"
+
+    @property
+    def suggested_object_id(self) -> str | None:
+        tail = self._image_id[-6:] if self._image_id else "face"
+        if self._phone_digits:
+            return f"{self._phone_digits}_face_{tail}"
+        return None
+
+    @property
+    def name(self) -> str | None:
+        face = self._face()
+        label = (face or {}).get("faceName") or (face or {}).get("name")
+        if label:
+            return str(label)
+        return None
+
+    @property
+    def available(self) -> bool:
+        return self._face() is not None
+
+    @property
+    def device_info(self):
+        phone = self._phone_digits or self._entry_id
+        return {
+            "identifiers": {(DOMAIN, phone)},
+            "name": f"Domonap {phone}",
+            "manufacturer": "Domonap",
+            "model": "Domonap Account",
+        }
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        face = self._face() or {"imageId": self._image_id}
+        return {
+            "imageId": face.get("imageId") or self._image_id,
+            "imageUrl": face.get("imageUrl"),
+            "faceName": face.get("faceName") or face.get("name"),
+        }
+
+    def _face(self) -> Optional[dict]:
+        for face in self.coordinator.faces:
+            if str(face.get("imageId") or "") == self._image_id:
+                return face
+        return None
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        await self._refresh_image()
+
+    async def async_image(self) -> bytes | None:
+        return self._image_bytes
+
+    def _handle_coordinator_update(self) -> None:
+        self.hass.async_create_task(self._refresh_image())
+        super()._handle_coordinator_update()
+
+    async def _refresh_image(self) -> None:
+        face = self._face()
+        url = (face or {}).get("imageUrl")
+        if not url or url == self._loaded_url:
+            self.async_write_ha_state()
+            return
+        response = await self.coordinator.api.fetch_external_bytes(url, authorized=True)
+        if not response.get("ok"):
+            response = await self.coordinator.api.fetch_external_bytes(
+                url, authorized=False
+            )
+        if response.get("ok"):
+            self._image_bytes = response["body"]
+            self._loaded_url = url
+            self._attr_image_last_updated = dt_util.utcnow()
+        self.async_write_ha_state()
+
