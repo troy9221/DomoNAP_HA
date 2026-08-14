@@ -65,6 +65,8 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     from .webrtc_proxy import DomonapWebRTCProxy, DomonapWebRTCProxySessionView, DomonapWebRTCProxyView
 
     await async_setup_actions(hass)
+    from .frontend import async_setup_frontend
+    await async_setup_frontend(hass)
     proxy = DomonapWebRTCProxy(hass)
     hass.data[DOMAIN][WEBRTC_PROXY] = proxy
     hass.http.register_view(DomonapWebRTCProxyView(proxy))
@@ -194,6 +196,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         )
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    from .dashboard import async_setup_dashboard
+
+    await async_setup_dashboard(hass)
     return True
 
 

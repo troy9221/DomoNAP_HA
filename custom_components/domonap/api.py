@@ -42,12 +42,35 @@ def extract_api_list(payload: Any, *keys: str) -> list:
     """Достать список из ответа API (.NET часто кладёт его в results/items)."""
     if isinstance(payload, list):
         return [item for item in payload if item is not None]
-    if not isinstance(payload, dict) or "error" in payload:
+    if not isinstance(payload, dict):
         return []
-    for key in keys:
+    if is_api_error(payload):
+        return []
+    search_keys = keys or (
+        "results",
+        "items",
+        "tickets",
+        "appealsList",
+        "messages",
+        "ticketMessages",
+        "faceImages",
+        "faces",
+    )
+    for key in search_keys:
         value = payload.get(key)
         if isinstance(value, list):
             return [item for item in value if item is not None]
+        if isinstance(value, dict):
+            nested = extract_api_list(value, *search_keys)
+            if nested:
+                return nested
+    for wrapper in ("data", "result", "payload", "response"):
+        inner = payload.get(wrapper)
+        if inner is payload or inner is None:
+            continue
+        nested = extract_api_list(inner, *search_keys)
+        if nested:
+            return nested
     return []
 
 
@@ -88,13 +111,18 @@ def normalize_face_items(payload: Any) -> list[dict]:
 
 def normalize_ticket_items(payload: Any) -> list[dict]:
     """Привести GetPagedTickets к списку обращений поддержки."""
-    items = extract_api_list(payload, "results", "items", "tickets")
+    items = extract_api_list(payload, "results", "items", "tickets", "appealsList")
     tickets: list[dict] = []
     for item in items:
         if not isinstance(item, dict):
             continue
         ticket = dict(item)
-        ticket_id = item.get("id") or item.get("ticketId") or item.get("ticket_id")
+        ticket_id = (
+            item.get("id")
+            or item.get("ticketId")
+            or item.get("ticket_id")
+            or item.get("appealId")
+        )
         if ticket_id:
             ticket["id"] = str(ticket_id)
             ticket["ticketId"] = str(ticket_id)
@@ -102,18 +130,121 @@ def normalize_ticket_items(payload: Any) -> list[dict]:
     return tickets
 
 
+def _ticket_last_text(ticket: dict) -> str | None:
+    for key in ("text", "message", "content", "lastMessage", "lastMessageText", "description"):
+        value = ticket.get(key)
+        if isinstance(value, dict):
+            value = (
+                value.get("text")
+                or value.get("message")
+                or value.get("content")
+            )
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
 def summarize_ticket(ticket: dict) -> dict:
     """Короткое представление тикета для атрибутов сенсора."""
+    ticket_id = ticket.get("ticketId") or ticket.get("id") or ticket.get("appealId")
     return {
-        "id": ticket.get("id") or ticket.get("ticketId"),
-        "ticketId": ticket.get("ticketId") or ticket.get("id"),
+        "id": str(ticket_id) if ticket_id else None,
+        "ticketId": str(ticket_id) if ticket_id else None,
         "status": ticket.get("ticketStatus") or ticket.get("status"),
-        "text": ticket.get("text") or ticket.get("message") or ticket.get("content"),
-        "theme": ticket.get("themeHeader") or ticket.get("theme") or ticket.get("title"),
+        "text": _ticket_last_text(ticket),
+        "theme": (
+            ticket.get("themeHeader")
+            or ticket.get("theme")
+            or ticket.get("title")
+            or ticket.get("appealTheme")
+        ),
         "address": ticket.get("address") or ticket.get("addressString"),
-        "createdOn": ticket.get("createdOn") or ticket.get("created"),
+        "createdOn": ticket.get("createdOn") or ticket.get("created") or ticket.get("appealCreateDate"),
         "rating": ticket.get("rating"),
+        "messages": list(ticket.get("messages") or []),
     }
+
+
+def normalize_ticket_messages(payload: Any) -> list[dict]:
+    """Привести GetTicketMessages / GetTicket к списку {text, name, isSupport, createdOn}."""
+    items: list = []
+    if isinstance(payload, list):
+        items = payload
+    elif isinstance(payload, dict) and not is_api_error(payload):
+        items = extract_api_list(
+            payload,
+            "results",
+            "items",
+            "messages",
+            "ticketMessages",
+            "ticketMessage",
+            "data",
+        )
+        if not items:
+            for key in ("ticket", "appeal", "ticketData"):
+                nested = payload.get(key)
+                if isinstance(nested, dict):
+                    items = extract_api_list(
+                        nested, "messages", "ticketMessages", "results", "items"
+                    )
+                    if items:
+                        break
+        if not items and (payload.get("text") or payload.get("message")):
+            items = [payload]
+
+    messages: list[dict] = []
+    for item in items:
+        if isinstance(item, str):
+            text = item.strip()
+            if text:
+                messages.append(
+                    {"text": text[:500], "name": "", "isSupport": False, "createdOn": None}
+                )
+            continue
+        if not isinstance(item, dict):
+            continue
+        text = (
+            item.get("text")
+            or item.get("message")
+            or item.get("content")
+            or item.get("body")
+            or item.get("ticketMessage")
+            or ""
+        )
+        if isinstance(text, dict):
+            text = text.get("text") or text.get("message") or ""
+        name = (
+            item.get("name")
+            or item.get("senderName")
+            or item.get("author")
+            or item.get("userName")
+            or item.get("operatorName")
+            or ""
+        )
+        is_support = item.get("isSupport")
+        if is_support is None:
+            is_support = bool(
+                item.get("fromSupport")
+                or item.get("isOperator")
+                or item.get("isIncoming")
+            )
+        created = (
+            item.get("createdOn")
+            or item.get("created")
+            or item.get("date")
+            or item.get("timestamp")
+        )
+        if not str(text).strip():
+            continue
+        messages.append(
+            {
+                "text": str(text)[:500],
+                "name": str(name)[:80],
+                "isSupport": bool(is_support),
+                "createdOn": created,
+            }
+        )
+    return messages[-40:]
 
 
 def _with_app_header_suffix(value: str) -> str:
@@ -942,6 +1073,120 @@ class IntercomAPI:
             expect="json",
         )
 
+    async def get_all_tickets(self, search: str = "", per_page: int = 50, max_pages: int = 10):
+        """Все обращения: в APK список — AppealsList + paging (AppealItemPagingSource)."""
+        tickets: list[dict] = []
+        seen: set[str] = set()
+        for page in range(1, max_pages + 1):
+            payload = await self.get_paged_tickets(
+                search=search, per_page=per_page, current_page=page
+            )
+            if is_api_error(payload):
+                if page == 1:
+                    _LOGGER.warning("GetPagedTickets failed: %s", payload)
+                break
+            items = normalize_ticket_items(payload)
+            if not items:
+                break
+            new_items = 0
+            for item in items:
+                ticket_id = str(item.get("ticketId") or item.get("id") or "")
+                if ticket_id and ticket_id in seen:
+                    continue
+                if ticket_id:
+                    seen.add(ticket_id)
+                tickets.append(item)
+                new_items += 1
+            if new_items == 0 or len(items) < per_page:
+                break
+        return tickets
+
+    async def get_user_properties(self):
+        return await self._post(
+            "/client-api/Property/GetUserProperties",
+            {},
+            need_auth=True,
+            expect="json",
+        )
+
+    def _property_from_keys(self, keys_payload: Any) -> dict[str, str]:
+        keys = extract_api_list(keys_payload, "results", "items")
+        for key in keys:
+            if not isinstance(key, dict):
+                continue
+            property_id = key.get("propertyId")
+            if property_id:
+                return {
+                    "propertyId": str(property_id),
+                    "address": str(key.get("addressString") or key.get("address") or ""),
+                }
+        return {}
+
+    def _theme_from_suggestions(self, payload: Any) -> dict[str, str]:
+        items = extract_api_list(
+            payload, "items", "results", "suggestions", "themes", "appealThemes"
+        )
+        if not items or not isinstance(items[0], dict):
+            return {}
+        theme = items[0]
+        theme_id = theme.get("id") or theme.get("themeId")
+        suggestion_id = (
+            theme.get("supportHelpSuggestionId") or theme.get("suggestionId") or theme_id
+        )
+        return {
+            key: value
+            for key, value in {
+                "themeId": str(theme_id) if theme_id else "",
+                "themeHeader": str(
+                    theme.get("themeHeader")
+                    or theme.get("header")
+                    or theme.get("name")
+                    or theme.get("text")
+                    or theme.get("title")
+                    or "Обращение"
+                ),
+                "supportHelpType": str(
+                    theme.get("supportHelpType") or theme.get("type") or ""
+                ),
+                "supportHelpSuggestionId": str(suggestion_id) if suggestion_id else "",
+            }.items()
+            if value
+        }
+
+    async def default_ticket_context(self) -> dict[str, str]:
+        """Поля CreateTicket из APK-роута темы: type/suggestion/header/address/code/propertyId."""
+        context: dict[str, str] = {"activationCode": ""}
+        try:
+            keys_payload = await self.get_all_keys()
+            context.update(self._property_from_keys(keys_payload))
+        except Exception as err:
+            _LOGGER.debug("ticket context keys failed: %s", err)
+        if not context.get("propertyId"):
+            props_payload = await self.get_user_properties()
+            if not is_api_error(props_payload):
+                props = extract_api_list(props_payload, "results", "items", "properties")
+                for prop in props:
+                    if not isinstance(prop, dict):
+                        continue
+                    property_id = (
+                        prop.get("propertyId") or prop.get("id") or prop.get("property_id")
+                    )
+                    if property_id:
+                        context["propertyId"] = str(property_id)
+                        context["address"] = str(
+                            prop.get("addressString")
+                            or prop.get("address")
+                            or prop.get("name")
+                            or ""
+                        )
+                        break
+        themes_payload = await self.get_support_help_suggestions({"search": ""})
+        if not is_api_error(themes_payload):
+            context.update(self._theme_from_suggestions(themes_payload))
+        if not context.get("themeHeader"):
+            context["themeHeader"] = "Обращение"
+        return context
+
     async def get_ticket(self, ticket_id: str):
         return await self._post(
             "/communication-api/Support/GetTicket",
@@ -957,6 +1202,25 @@ class IntercomAPI:
             need_auth=True,
             expect="json",
         )
+
+    async def fetch_ticket_conversation(self, ticket_id: str) -> list[dict]:
+        """Сообщения обращения: GetTicketMessages, при пустом ответе — GetTicket."""
+        payload = await self.get_ticket_messages(ticket_id)
+        if is_api_error(payload):
+            _LOGGER.debug("GetTicketMessages(%s) failed: %s", ticket_id, payload)
+            payload = {}
+        elif isinstance(payload, dict):
+            _LOGGER.debug("GetTicketMessages(%s) keys=%s", ticket_id, list(payload.keys())[:20])
+        messages = normalize_ticket_messages(payload)
+        if messages:
+            return messages
+        ticket_payload = await self.get_ticket(ticket_id)
+        if is_api_error(ticket_payload):
+            _LOGGER.debug("GetTicket(%s) failed: %s", ticket_id, ticket_payload)
+            return []
+        if isinstance(ticket_payload, dict):
+            _LOGGER.debug("GetTicket(%s) keys=%s", ticket_id, list(ticket_payload.keys())[:20])
+        return normalize_ticket_messages(ticket_payload)
 
     async def send_message_to_support(
         self,
@@ -980,12 +1244,36 @@ class IntercomAPI:
         return {"ok": True, "body": res}
 
     async def create_support_ticket(self, payload: Dict[str, Any]):
-        return await self._post(
+        body = dict(payload or {})
+        if not body.get("text"):
+            return {"error": "text is required", "status": 400, "body": ""}
+        defaults = await self.default_ticket_context()
+        for key, value in defaults.items():
+            body.setdefault(key, value)
+        body = {key: value for key, value in body.items() if value not in (None, "")}
+        _LOGGER.debug("CreateTicket payload keys: %s", sorted(body.keys()))
+        res = await self._post(
             "/communication-api/Support/CreateTicket",
-            payload,
+            body,
             need_auth=True,
             expect="json",
         )
+        if is_api_error(res) and res.get("status") in (400, 422, 500):
+            retry = {"text": body["text"]}
+            for key in ("propertyId", "address", "themeHeader", "themeId"):
+                if body.get(key):
+                    retry[key] = body[key]
+            if retry != body:
+                _LOGGER.warning("CreateTicket retry with slimmer payload after %s", res)
+                retry_res = await self._post(
+                    "/communication-api/Support/CreateTicket",
+                    retry,
+                    need_auth=True,
+                    expect="json",
+                )
+                if not is_api_error(retry_res):
+                    return retry_res
+        return res
 
     async def evaluate_support_ticket(
         self,

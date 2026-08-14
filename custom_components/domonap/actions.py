@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any
 
 import voluptuous as vol
@@ -161,6 +162,38 @@ def _guess_image_meta(url: str, filename: str | None) -> tuple[str, str]:
     if not lower.endswith((".jpg", ".jpeg")):
         name = f"{name}.jpg" if "." not in name else name
     return name, "image/jpeg"
+
+
+def _www_root(hass: HomeAssistant) -> Path:
+    return Path(hass.config.path("www")).resolve()
+
+
+def _resolve_local_face_path(hass: HomeAssistant, image_url: str) -> Path | None:
+    """Map /local/... or a www filename to a file under config/www.
+
+    HTTP(S) URLs return None so the caller downloads them. Anything else is
+    treated as a local www path.
+    """
+    raw = (image_url or "").strip()
+    if not raw or raw.startswith(("http://", "https://")):
+        return None
+    www = _www_root(hass)
+    if raw.startswith("/local/"):
+        rel = raw[len("/local/") :]
+    elif raw.startswith("local/"):
+        rel = raw[len("local/") :]
+    elif raw.startswith("/config/www/"):
+        rel = raw[len("/config/www/") :]
+    elif raw.startswith("www/"):
+        rel = raw[len("www/") :]
+    elif "/" not in raw.replace("\\", "/"):
+        rel = raw
+    else:
+        rel = raw.lstrip("/")
+    path = (www / rel).resolve()
+    if not path.is_relative_to(www):
+        raise HomeAssistantError("Фото для прохода по лицу должно лежать в /config/www")
+    return path
 
 
 def _select_entry_id(hass: HomeAssistant, requested_entry_id: str | None) -> str | None:
@@ -349,24 +382,44 @@ async def async_setup_actions(hass: HomeAssistant) -> None:
 
     async def handle_get_support_ticket_messages(call: ServiceCall) -> dict[str, Any]:
         entry_id, api = _require_entry_api(hass, call.data.get("config_entry_id"))
-        res = await api.get_ticket_messages(call.data["ticket_id"])
-        if is_api_error(res):
-            raise HomeAssistantError(f"Failed to load ticket messages: {res}")
-        return {"status": "ok", "config_entry_id": entry_id, "response": res}
+        ticket_id = call.data["ticket_id"]
+        messages = await api.fetch_ticket_conversation(ticket_id)
+        return {
+            "status": "ok",
+            "config_entry_id": entry_id,
+            "ticket_id": ticket_id,
+            "messages": messages,
+        }
 
     async def handle_create_face(call: ServiceCall) -> dict[str, Any]:
         entry_id, api = _require_entry_api(hass, call.data.get("config_entry_id"))
         image_url = call.data["image_url"]
         filename, content_type = _guess_image_meta(image_url, call.data.get("filename"))
-        downloaded = await api.fetch_external_bytes(image_url, authorized=True)
-        if not downloaded.get("ok"):
-            downloaded = await api.fetch_external_bytes(image_url, authorized=False)
-        if not downloaded.get("ok"):
-            raise HomeAssistantError(
-                f"Failed to download face image: {downloaded.get('error')}"
-            )
+        local_path = _resolve_local_face_path(hass, image_url)
+        if local_path is not None:
+            if not local_path.is_file():
+                raise HomeAssistantError(
+                    "Нет файла "
+                    f"{local_path.name} в /config/www. "
+                    "Скопируйте фото лица туда (например domonap-face.jpg) и нажмите ещё раз."
+                )
+            try:
+                body = await hass.async_add_executor_job(local_path.read_bytes)
+            except OSError as err:
+                raise HomeAssistantError(f"Не удалось прочитать фото: {err}") from err
+            if not body:
+                raise HomeAssistantError(f"Файл пустой: {local_path.name}")
+        else:
+            downloaded = await api.fetch_external_bytes(image_url, authorized=True)
+            if not downloaded.get("ok"):
+                downloaded = await api.fetch_external_bytes(image_url, authorized=False)
+            if not downloaded.get("ok"):
+                raise HomeAssistantError(
+                    f"Failed to download face image: {downloaded.get('error')}"
+                )
+            body = downloaded["body"]
         res = await api.create_face(
-            downloaded["body"],
+            body,
             filename=filename,
             content_type=content_type,
         )

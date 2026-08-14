@@ -353,10 +353,12 @@ class DomonapSupportTicketsSensor(CoordinatorEntity, SensorEntity):
     def extra_state_attributes(self) -> dict[str, Any]:
         tickets = [summarize_ticket(ticket) for ticket in self.coordinator.tickets]
         last = tickets[0] if tickets else None
+        data = self.coordinator.data or {}
         return {
             "tickets": tickets,
             "count": len(tickets),
             "last_ticket": last,
-            "last_ticket_id": (last or {}).get("ticketId"),
+            "last_ticket_id": data.get("last_ticket_id") or (last or {}).get("ticketId"),
+            "last_ticket_messages": list(data.get("last_ticket_messages") or []),
         }
 

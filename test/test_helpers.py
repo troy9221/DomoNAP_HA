@@ -223,7 +223,85 @@ def test_normalize_ticket_items():
     summary = api.summarize_ticket(tickets[0])
     assert summary["theme"] == "Lift"
     assert summary["text"] == "Hello"
+    nested = api.summarize_ticket(
+        {"id": "t2", "themeHeader": "Gate", "lastMessage": {"text": "Когда откроют?"}}
+    )
+    assert nested["text"] == "Когда откроют?"
     assert api.normalize_ticket_items({"error": "HTTP 401", "status": 401}) == []
+
+
+def test_extract_api_list_ignores_null_error_and_appeals_list():
+    payload = {
+        "error": None,
+        "results": [{"id": "t1"}],
+    }
+    assert api.extract_api_list(payload, "results", "appealsList") == [{"id": "t1"}]
+    assert api.extract_api_list(
+        {"appealsList": [{"id": "a1"}]}, "results", "appealsList"
+    ) == [{"id": "a1"}]
+    assert api.extract_api_list(
+        {"data": {"results": [{"id": "n1"}]}}, "results"
+    ) == [{"id": "n1"}]
+
+
+def test_theme_and_property_from_apk_shapes():
+    client = IntercomAPI()
+    theme = client._theme_from_suggestions(
+        {
+            "items": [
+                {
+                    "id": "th1",
+                    "header": "Домофон",
+                    "supportHelpType": "intercom",
+                }
+            ]
+        }
+    )
+    assert theme["themeId"] == "th1"
+    assert theme["themeHeader"] == "Домофон"
+    assert theme["supportHelpType"] == "intercom"
+    prop = client._property_from_keys(
+        {"results": [{"name": "Калитка", "propertyId": "prop-1", "addressString": "д.3"}]}
+    )
+    assert prop["propertyId"] == "prop-1"
+    assert prop["address"] == "д.3"
+
+
+def test_normalize_ticket_messages():
+    payload = {
+        "results": [
+            {
+                "text": "Не открывается калитка",
+                "name": "Я",
+                "createdOn": "2026-08-01T10:00:00Z",
+            },
+            {
+                "message": "Принято",
+                "senderName": "Оператор",
+                "isSupport": True,
+                "createdOn": "2026-08-01T10:05:00Z",
+            },
+        ]
+    }
+    messages = api.normalize_ticket_messages(payload)
+    assert len(messages) == 2
+    assert messages[0]["text"] == "Не открывается калитка"
+    assert messages[1]["isSupport"] is True
+    assert messages[1]["name"] == "Оператор"
+    assert api.normalize_ticket_messages({"error": "HTTP 500", "status": 500}) == []
+    assert api.normalize_ticket_messages(["коротко"])[0]["text"] == "коротко"
+
+
+def test_domonap_dashboard_config_helper():
+    _install_homeassistant_stub()
+    const = _load_module("domonap_const", CONST_PATH)
+    assert const.DASHBOARD_URL_PATH == "domonap-home"
+    assert "-" in const.DASHBOARD_URL_PATH
+    assert const.is_domonap_dashboard_config(
+        {"strategy": {"type": "custom:domonap"}}
+    )
+    assert not const.is_domonap_dashboard_config({"views": []})
+    assert not const.is_domonap_dashboard_config(None)
 
 
 def test_is_api_error():

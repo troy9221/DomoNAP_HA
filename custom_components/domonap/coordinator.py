@@ -11,7 +11,6 @@ from .api import (
     IntercomAPI,
     is_api_error,
     normalize_face_items,
-    normalize_ticket_items,
 )
 from .const import DOMAIN
 
@@ -44,21 +43,36 @@ class DomonapAccountCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def _async_update_data(self) -> dict[str, Any]:
         faces_payload = await self.api.get_faces()
-        tickets_payload = await self.api.get_paged_tickets()
-
         if is_api_error(faces_payload):
             _LOGGER.debug("GetFaces failed: %s", faces_payload)
-        if is_api_error(tickets_payload):
-            _LOGGER.debug("GetPagedTickets failed: %s", tickets_payload)
 
         faces = normalize_face_items(faces_payload)
-        tickets = normalize_ticket_items(tickets_payload)
-        _LOGGER.debug("Account snapshot: %d faces, %d tickets", len(faces), len(tickets))
+        tickets = await self.api.get_all_tickets()
+        last_ticket_id = (
+            str(tickets[0].get("ticketId") or tickets[0].get("id") or "")
+            if tickets
+            else None
+        )
+        last_ticket_messages: list[dict[str, Any]] = []
+        for ticket in tickets[:15]:
+            ticket_id = str(ticket.get("ticketId") or ticket.get("id") or "")
+            if not ticket_id:
+                continue
+            conversation = await self.api.fetch_ticket_conversation(ticket_id)
+            ticket["messages"] = conversation
+            if ticket_id == last_ticket_id:
+                last_ticket_messages = conversation
+        _LOGGER.debug(
+            "Account snapshot: %d faces, %d tickets, %d messages",
+            len(faces),
+            len(tickets),
+            len(last_ticket_messages),
+        )
         return {
             "faces": faces,
             "tickets": tickets,
+            "last_ticket_id": last_ticket_id,
+            "last_ticket_messages": last_ticket_messages,
             "faces_payload": faces_payload if isinstance(faces_payload, dict) else {},
-            "tickets_payload": (
-                tickets_payload if isinstance(tickets_payload, dict) else {}
-            ),
+            "tickets_payload": {},
         }

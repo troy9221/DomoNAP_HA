@@ -27,6 +27,19 @@ WEBRTC_PROXY = "webrtc_proxy"
 MEDIA_PROXY = "media_proxy"
 UPDATE_COORDINATOR = "update_coordinator"
 ACCOUNT_COORDINATOR = "account_coordinator"
+DASHBOARD_URL_PATH = "domonap-home"
+DASHBOARD_TITLE = "Домофон"
+DASHBOARD_STRATEGY_TYPE = "custom:domonap"
+
+
+def is_domonap_dashboard_config(config: object) -> bool:
+    """True, если Lovelace-конфиг — автодашборд интеграции."""
+    if not isinstance(config, dict):
+        return False
+    strategy = config.get("strategy")
+    if not isinstance(strategy, dict):
+        return False
+    return strategy.get("type") == DASHBOARD_STRATEGY_TYPE
 
 PLATFORMS: list[Platform] = [
     Platform.BUTTON,

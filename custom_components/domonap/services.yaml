@@ -159,8 +159,8 @@ create_face:
   description: Uploads a photo for face/avatar door access (проход по лицу / аватару).
   fields:
     image_url:
-      name: Image URL
-      description: HTTP(S) URL of a face photo.
+      name: Image URL or local file
+      description: HTTP(S) URL, or a file in /config/www (for example /local/domonap-face.jpg).
       required: true
       selector:
         text:

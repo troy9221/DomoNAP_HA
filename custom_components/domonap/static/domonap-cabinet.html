@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>DomoNAP</title>
+  <style>
+    :root { color-scheme: dark light; }
+    html, body { margin: 0; min-height: 100%; }
+    body { padding: 16px; font-family: Roboto, system-ui, sans-serif; background: #111; color: #eee; }
+    h2 { margin: 0 0 8px; font-size: 1.25rem; }
+    .hint { opacity: .75; font-size: .95rem; line-height: 1.4; margin: 0 0 12px; }
+    .row { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0; }
+    button { appearance: none; border: 0; border-radius: 12px; padding: 12px 14px; font-size: 1rem;
+      background: #03a9f4; color: #fff; cursor: pointer; flex: 1; min-width: 140px; touch-action: manipulation; }
+    button.sec { background: #2a2a2a; color: #eee; border: 1px solid #444; }
+    textarea { width: 100%; min-height: 96px; box-sizing: border-box; border-radius: 12px; padding: 10px;
+      border: 1px solid #444; background: #1b1b1b; color: inherit; font-size: 1rem; }
+    .ticket { border: 1px solid #444; border-radius: 12px; padding: 12px; margin: 8px 0; text-align: left; width: 100%;
+      background: #1a1a1a; color: inherit; cursor: pointer; display: block; box-sizing: border-box;
+      touch-action: manipulation; }
+    .ticket .go { margin-top: 8px; font-size: .9rem; color: #03a9f4; }
+    .thread { margin: 8px 0 16px; }
+    .msg { padding: 10px 0; border-bottom: 1px solid #333; white-space: pre-wrap; }
+    .msg b { display: block; font-size: .85rem; opacity: .8; }
+    .status { margin-top: 8px; font-size: .95rem; }
+    .error { color: #ff6b6b; }
+    .faces { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; }
+    .face { border: 1px solid #444; border-radius: 12px; overflow: hidden; }
+    .face img { width: 100%; height: 140px; object-fit: cover; background: #000; display: block; }
+    .face .cap { padding: 8px; font-size: .85rem; display: flex; justify-content: space-between; gap: 6px; align-items: center; }
+    input[type=file] { display: none; }
+  </style>
+</head>
+<body>
+  <div id="app">Загрузка…</div>
+  <script>
+    const MODE = new URLSearchParams(location.search).get("mode") === "face" ? "face" : "support";
+    const app = document.getElementById("app");
+    let selected = null;
+    let loadingId = null;
+    let cache = {};
+
+    function hass() {
+      try { return parent.document.querySelector("home-assistant").hass; } catch (e) { return null; }
+    }
+    function token() {
+      try { return hass().auth.data.access_token; } catch (e) { return ""; }
+    }
+    function esc(v) {
+      return String(v || "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;" }[c]));
+    }
+    function findState(suffix) {
+      const h = hass();
+      if (!h) return null;
+      const id = Object.keys(h.states).find((x) => x.endsWith(suffix));
+      return id ? h.states[id] : null;
+    }
+    function setStatus(text, isError) {
+      const el = document.querySelector(".status");
+      if (!el) return;
+      el.className = "status" + (isError ? " error" : "");
+      el.textContent = text || "";
+    }
+    function ticketsState() {
+      const h = hass();
+      return findState("_support_tickets") || (h && h.states["sensor.domonap_9164270777_9164270777_support_tickets"]);
+    }
+    function allTickets() {
+      const st = ticketsState();
+      return (st && st.attributes && st.attributes.tickets) || [];
+    }
+    function ticketIdOf(t, index) {
+      return String(t.ticketId || t.id || t.appealId || (index != null ? "idx-" + index : ""));
+    }
+    function findTicket(id) {
+      return allTickets().find((t, i) => ticketIdOf(t, i) === String(id)) || { ticketId: id, theme: "Обращение" };
+    }
+    function fallbackMsgs(t) {
+      const text = (t && t.text) || "";
+      if (!text) return [];
+      return [{ text, name: "Вы", isSupport: false, createdOn: t.createdOn || null }];
+    }
+    function msgsFromTicket(t) {
+      const id = ticketIdOf(t);
+      if (cache[id] && cache[id].length) return cache[id];
+      if (Array.isArray(t.messages) && t.messages.length) return t.messages;
+      const st = ticketsState();
+      const lastId = st && st.attributes && String(st.attributes.last_ticket_id || "");
+      const lastMsgs = (st && st.attributes && st.attributes.last_ticket_messages) || [];
+      if (id && lastId && id === lastId && lastMsgs.length) return lastMsgs;
+      return fallbackMsgs(t);
+    }
+    function renderMsgs(msgs) {
+      if (!msgs || !msgs.length) return "<p class='hint'>Сообщений пока нет. Напишите ответ ниже.</p>";
+      return msgs.map((m) => {
+        const text = (m && (m.text || m.message || m.content)) || "";
+        const name = (m && (m.name || m.senderName)) || (m && m.isSupport ? "Поддержка" : "Вы");
+        return `<div class="msg"><b>${esc(name)}</b>${esc(text)}</div>`;
+      }).join("");
+    }
+
+    function render() {
+      const h = hass();
+      if (!h) {
+        app.innerHTML = "<p class='error'>Откройте эту вкладку внутри Home Assistant (дашборд Домофон).</p>";
+        return;
+      }
+      if (MODE === "face") renderFace(h); else renderSupport();
+    }
+
+    function renderSupport() {
+      if (selected) {
+        renderThread();
+        return;
+      }
+      const tickets = allTickets();
+      const list = tickets.length ? tickets.map((t, index) => {
+        const id = ticketIdOf(t, index);
+        const preview = (t.text || "").slice(0, 180);
+        return `<div class="ticket" data-id="${esc(id)}" role="button" tabindex="0">
+          <b>${esc(t.theme || "Обращение")}</b>
+          <div>${esc(t.status || "")}${ticketIdOf(t) ? " · " + esc(ticketIdOf(t).slice(-8)) : ""}</div>
+          ${preview ? `<div>${esc(preview)}</div>` : ""}
+          <div class="go">Открыть переписку →</div>
+        </div>`;
+      }).join("") : "<p class='hint'>Обращений пока нет. Напишите текст и нажмите «Новое обращение».</p>";
+      const prevText = (document.querySelector(".text") || {}).value || "";
+      app.innerHTML = `<h2>Поддержка</h2>
+        <p class="hint">Нажмите обращение, чтобы открыть историю сообщений.</p>
+        <div class="list">${list}</div>
+        <textarea class="text" placeholder="Текст нового обращения"></textarea>
+        <div class="row">
+          <button type="button" class="create">Новое обращение</button>
+        </div>
+        <div class="status"></div>`;
+      if (prevText) document.querySelector(".text").value = prevText;
+      app.querySelectorAll(".ticket").forEach((el) => {
+        el.addEventListener("click", (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+          openTicket(el.getAttribute("data-id"));
+        });
+      });
+      app.querySelector(".create").onclick = () => send(true);
+    }
+
+    function renderThread() {
+      const t = findTicket(selected);
+      const msgs = loadingId === selected && !(cache[selected] && cache[selected].length)
+        ? []
+        : msgsFromTicket(t);
+      const threadHtml = loadingId === selected
+        ? "<p class='hint'>Загрузка переписки…</p>"
+        : renderMsgs(msgs);
+      const prevText = (document.querySelector(".text") || {}).value || "";
+      app.innerHTML = `<button type="button" class="sec back">← К обращениям</button>
+        <h2>${esc(t.theme || "Обращение")}</h2>
+        <p class="hint">${esc(t.status || "")}${ticketIdOf(t) ? " · " + esc(ticketIdOf(t)) : ""}</p>
+        <div class="thread">${threadHtml}</div>
+        <textarea class="text" placeholder="Текст ответа"></textarea>
+        <div class="row">
+          <button type="button" class="reply">Ответить</button>
+        </div>
+        <div class="status"></div>`;
+      if (prevText) document.querySelector(".text").value = prevText;
+      app.querySelector(".back").onclick = () => { selected = null; renderSupport(); };
+      app.querySelector(".reply").onclick = () => send(false);
+    }
+
+    function renderFace(h) {
+      const st = findState("_face_pass") || h.states["sensor.domonap_9164270777_9164270777_face_pass"];
+      const faces = (st && st.attributes && st.attributes.faces) || [];
+      const imgs = Object.values(h.states).filter((s) => s.entity_id.startsWith("image.") && s.entity_id.includes("_face_"));
+      const grid = faces.length ? faces.map((f) => {
+        const id = f.imageId || "";
+        const img = imgs.find((s) => (s.attributes.imageId || "") === id);
+        const src = (img && img.attributes && img.attributes.entity_picture) || "";
+        const pic = src ? `<img src="${src}">` : `<div style="height:140px"></div>`;
+        return `<div class="face">${pic}<div class="cap"><span>${esc(f.faceName || "Фото")}</span>
+          <button type="button" class="sec del" data-id="${esc(id)}">Удалить</button></div></div>`;
+      }).join("") : "<p class='hint'>Фото ещё нет — добавьте снимок кнопками ниже.</p>";
+      app.innerHTML = `<h2>Проход по лицу</h2>
+        <p class="hint">Сфотографируйте себя или выберите несколько снимков из галереи.</p>
+        <div class="faces">${grid}</div>
+        <div class="row">
+          <button type="button" class="cam">Сфотографировать</button>
+          <button type="button" class="gal sec">Из галереи</button>
+        </div>
+        <input class="cam-in" type="file" accept="image/*" capture="environment">
+        <input class="gal-in" type="file" accept="image/*" multiple>
+        <div class="status"></div>`;
+      app.querySelector(".cam").onclick = () => app.querySelector(".cam-in").click();
+      app.querySelector(".gal").onclick = () => app.querySelector(".gal-in").click();
+      app.querySelector(".cam-in").onchange = (e) => upload(e.target.files);
+      app.querySelector(".gal-in").onchange = (e) => upload(e.target.files);
+      app.querySelectorAll(".del").forEach((btn) => btn.onclick = () => deleteFace(btn.dataset.id));
+    }
+
+    function parseMessages(data) {
+      if (!data) return [];
+      if (Array.isArray(data)) return data;
+      if (Array.isArray(data.messages)) return data.messages;
+      const sr = data.service_response || data.response || data;
+      if (Array.isArray(sr)) return sr;
+      if (sr && Array.isArray(sr.messages)) return sr.messages;
+      const payload = (sr && (sr.response || sr)) || {};
+      if (Array.isArray(payload.messages)) return payload.messages;
+      const items = payload.results || payload.items || payload.ticketMessages || [];
+      return Array.isArray(items) ? items : [];
+    }
+
+    async function openTicket(id) {
+      id = String(id || "");
+      if (!id) return;
+      selected = id;
+      loadingId = (id.indexOf("idx-") === 0) ? null : id;
+      renderSupport();
+      if (!loadingId) return;
+      if (cache[id] && cache[id].length) { loadingId = null; renderSupport(); return; }
+      try {
+        const resp = await fetch("/api/services/domonap/get_support_ticket_messages?return_response", {
+          method: "POST",
+          headers: {
+            Authorization: "Bearer " + token(),
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ ticket_id: id }),
+        });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error((data && (data.message || data.error)) || ("HTTP " + resp.status));
+        const msgs = parseMessages(data);
+        cache[id] = msgs.length ? msgs : fallbackMsgs(findTicket(id));
+      } catch (err) {
+        cache[id] = cache[id] || fallbackMsgs(findTicket(id));
+        if (selected === id) {
+          loadingId = null;
+          renderSupport();
+          setStatus(String(err), true);
+          return;
+        }
+      }
+      if (loadingId === id) loadingId = null;
+      if (selected === id) renderSupport();
+    }
+
+    async function send(createNew) {
+      const text = (document.querySelector(".text").value || "").trim();
+      if (!text) { setStatus("Введите текст", true); return; }
+      if (!createNew && (!selected || String(selected).indexOf("idx-") === 0)) {
+        setStatus("Сначала откройте обращение", true);
+        return;
+      }
+      setStatus(createNew ? "Создаю обращение…" : "Отправляю…");
+      const path = createNew ? "create_support_ticket" : "send_support_message";
+      const body = { text };
+      if (!createNew && selected) body.ticket_id = selected;
+      try {
+        const resp = await fetch("/api/services/domonap/" + path, {
+          method: "POST",
+          headers: {
+            Authorization: "Bearer " + token(),
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(body),
+        });
+        if (!resp.ok) throw new Error(await resp.text());
+        document.querySelector(".text").value = "";
+        if (selected) delete cache[selected];
+        setStatus("Готово. Обновляю…");
+        const keep = selected;
+        setTimeout(() => { if (keep) openTicket(keep); else render(); }, 2000);
+      } catch (err) {
+        setStatus(String(err), true);
+      }
+    }
+
+    async function upload(fileList) {
+      const files = Array.from(fileList || []);
+      if (!files.length) return;
+      setStatus("Загружаю " + files.length + " фото…");
+      const fd = new FormData();
+      files.forEach((f, i) => fd.append("file", f, f.name || ("face-" + (i + 1) + ".jpg")));
+      try {
+        const resp = await fetch("/api/domonap/face", {
+          method: "POST",
+          headers: { Authorization: "Bearer " + token() },
+          body: fd,
+        });
+        const data = await resp.json();
+        if (!resp.ok || data.ok === false) throw new Error(data.error || JSON.stringify(data.errors || data));
+        setStatus("Добавлено фото: " + data.created);
+        setTimeout(render, 2500);
+      } catch (err) {
+        setStatus(String(err), true);
+      }
+    }
+
+    async function deleteFace(imageId) {
+      if (!imageId) return;
+      try {
+        const resp = await fetch("/api/services/domonap/delete_face", {
+          method: "POST",
+          headers: {
+            Authorization: "Bearer " + token(),
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ image_id: imageId }),
+        });
+        if (!resp.ok) throw new Error(await resp.text());
+        setStatus("Фото удалено");
+        setTimeout(render, 1500);
+      } catch (err) {
+        setStatus(String(err), true);
+      }
+    }
+
+    function boot() {
+      if (hass()) { render(); return; }
+      app.innerHTML = "<p class='hint'>Подключение к Home Assistant…</p>";
+      let n = 0;
+      const t = setInterval(() => {
+        n += 1;
+        if (hass()) { clearInterval(t); render(); }
+        else if (n > 40) { clearInterval(t); render(); }
+      }, 250);
+    }
+    boot();
+  </script>
+</body>
+</html>

@@ -1,25 +1,15 @@
-# =============================================================================
-# Фрагмент для configuration.yaml — подключение YAML-дашборда "Домофон"
-# =============================================================================
-# Добавьте этот блок в /var/lib/homeassistant/homeassistant/configuration.yaml
+# Ручное подключение YAML-дашборда больше не требуется.
+# Интеграция Domonap сама создаёт дашборд «Домофон» в боковом меню
+# (URL /domonap-home) после установки и авторизации.
 #
-# ВАЖНО:
-#   - Если секции "lovelace:" в configuration.yaml ЕЩЁ НЕТ — добавьте блок целиком.
-#   - Если секция "lovelace:" УЖЕ ЕСТЬ — добавьте только содержимое "dashboards:"
-#     внутрь существующей секции (не дублируйте ключ "lovelace:").
-#   - "mode: storage" сохраняет ваши обычные UI-дашборды нетронутыми; новый
-#     дашборд "Домофон" будет читаться из отдельного YAML-файла.
-#   - После изменения configuration.yaml нужен ПОЛНЫЙ перезапуск HA
-#     (Настройки -> Система -> Перезапустить). Проверьте конфиг перед рестартом:
-#     Настройки -> Система -> вкладка "Проверить конфигурацию".
-# =============================================================================
+# Этот фрагмент оставлен только для совместимости со старыми инструкциями.
 
-lovelace:
-  mode: storage
-  dashboards:
-    domofon-dashboard:                 # slug -> URL: /domofon-dashboard
-      mode: yaml
-      title: Домофон
-      icon: mdi:doorbell-video
-      show_in_sidebar: true
-      filename: dashboards/domofon.yaml
+# lovelace:
+#   mode: storage
+#   dashboards:
+#     domofon-dashboard:
+#       mode: yaml
+#       title: Домофон
+#       icon: mdi:doorbell-video
+#       show_in_sidebar: true
+#       filename: dashboards/domofon.yaml
