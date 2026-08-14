@@ -6,6 +6,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
 
 from .const import DOMAIN, API
+from .api import is_api_error
 from .util import extract_phone_digits, is_valid_last_call_state, open_relay_from_last_call_state
 
 _LOGGER = logging.getLogger(__name__)
@@ -22,7 +23,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
 
     # Existing per-door buttons — use get_all_keys() to get ALL keys (all types, all pages)
     response = await api.get_all_keys()
-    if not isinstance(response, dict) or "error" in response:
+    if not isinstance(response, dict) or is_api_error(response):
         _LOGGER.error("Failed to load Domonap keys for buttons: %s", response)
         async_add_entities(entities, True)
         return

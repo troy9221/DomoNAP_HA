@@ -25,6 +25,7 @@ except ImportError:
     WebRTCSendMessage = None
 
 from .const import API, DOMAIN, PARAM_WEBRTC_PROXY_SECRET, WEBRTC_PROXY
+from .api import is_api_error
 from .webrtc_proxy import _resolve_upstream_session_url
 
 _LOGGER = logging.getLogger(__name__)
@@ -88,7 +89,7 @@ def _build_key_camera_entities(api, proxy, proxy_secret: str | None, response) -
         )
         return []
 
-    if "error" in response:
+    if is_api_error(response):
         _log_api_error("Loading Domonap key cameras", response)
         return []
 
@@ -129,7 +130,7 @@ async def _build_video_camera_entities(api, proxy, proxy_secret: str | None, res
         _LOGGER.exception("Failed to load Domonap video areas", exc_info=response)
         return []
 
-    if isinstance(response, dict) and "error" in response:
+    if isinstance(response, dict) and is_api_error(response):
         _log_api_error("Loading Domonap video areas", response)
         return []
 
@@ -168,7 +169,7 @@ async def _build_video_camera_entities(api, proxy, proxy_secret: str | None, res
             )
             continue
 
-        if isinstance(category_response, dict) and "error" in category_response:
+        if isinstance(category_response, dict) and is_api_error(category_response):
             _log_api_error(
                 f"Loading Domonap cameras for category {category}", category_response
             )

@@ -75,7 +75,17 @@ def extract_api_list(payload: Any, *keys: str) -> list:
 
 
 def is_api_error(payload: Any) -> bool:
-    return isinstance(payload, dict) and "error" in payload and "status" in payload
+    """True for failed API calls.
+
+    .NET-ответы часто содержат ``error: null`` при успехе — это не ошибка.
+    Словари с ``ok: False`` (истекшая сессия без HTTP status) — ошибка.
+    """
+    if not isinstance(payload, dict):
+        return False
+    if payload.get("ok") is False:
+        return True
+    error = payload.get("error")
+    return error not in (None, "", False)
 
 
 def normalize_face_items(payload: Any) -> list[dict]:
@@ -147,7 +157,7 @@ def _ticket_last_text(ticket: dict) -> str | None:
 def summarize_ticket(ticket: dict) -> dict:
     """Короткое представление тикета для атрибутов сенсора."""
     ticket_id = ticket.get("ticketId") or ticket.get("id") or ticket.get("appealId")
-    return {
+    summary = {
         "id": str(ticket_id) if ticket_id else None,
         "ticketId": str(ticket_id) if ticket_id else None,
         "status": ticket.get("ticketStatus") or ticket.get("status"),
@@ -161,8 +171,11 @@ def summarize_ticket(ticket: dict) -> dict:
         "address": ticket.get("address") or ticket.get("addressString"),
         "createdOn": ticket.get("createdOn") or ticket.get("created") or ticket.get("appealCreateDate"),
         "rating": ticket.get("rating"),
-        "messages": list(ticket.get("messages") or []),
     }
+    messages = list(ticket.get("messages") or [])
+    if messages:
+        summary["messages"] = messages
+    return summary
 
 
 _SUPPORT_NAME_MARKERS = (
@@ -732,7 +745,7 @@ class IntercomAPI:
             expect="text",
             retry_on_401=True,
         )
-        if isinstance(result, dict) and "error" in result:
+        if is_api_error(result):
             _LOGGER.error("UpdateDeviceToken failed: %s", result)
             return False
         _LOGGER.debug("UpdateDeviceToken ok")
@@ -741,7 +754,7 @@ class IntercomAPI:
     async def authorize(self, country_code: str, phone_number: str) -> Union[bool, Dict[str, Any]]:
         payload = {"phoneNumber": self._phone_number(country_code, phone_number)}
         res = await self._post("/sso-api/Authorization/Authorize", payload, expect="text", need_auth=False)
-        if isinstance(res, dict) and "error" in res:
+        if is_api_error(res):
             return {"error": f"Authorization failed: {res}"}
         return True
 
@@ -758,7 +771,7 @@ class IntercomAPI:
             "deviceToken": device_token or self.device_token,
         }
         res = await self._post("/sso-api/Authorization/ConfirmAuthorization", payload, expect="json", need_auth=False)
-        if isinstance(res, dict) and "error" in res and "status" in res:
+        if is_api_error(res):
             return res
         try:
             ct = res["completeToken"]
@@ -789,8 +802,8 @@ class IntercomAPI:
             need_auth=False,
             retry_on_401=False,
         )
-        if isinstance(res, dict) and "error" in res and "status" in res:
-            if res["status"] in (400, 401, 403):
+        if is_api_error(res):
+            if res.get("status") in (400, 401, 403):
                 self._mark_refresh_token_invalid(f"refresh token rejected with HTTP {res['status']}")
             return res
         try:
@@ -813,7 +826,7 @@ class IntercomAPI:
 
     async def get_username(self) -> Optional[str]:
         user = await self.get_user()
-        if isinstance(user, dict) and "error" not in user:
+        if isinstance(user, dict) and not is_api_error(user):
             profile = user.get("userProfile")
             if isinstance(profile, dict):
                 self._log_call_mode_fields(user)
@@ -869,7 +882,7 @@ class IntercomAPI:
                 )
                 return []
 
-            if "error" in keys_data:
+            if is_api_error(keys_data):
                 _LOGGER.debug(
                     "Key type '%s' not supported: %s", type_label, keys_data.get("error")
                 )
@@ -1357,7 +1370,7 @@ class IntercomAPI:
             need_auth=True,
             expect="json",
         )
-        if isinstance(res, dict) and "error" in res and "status" in res:
+        if is_api_error(res):
             return res
         if isinstance(res, dict):
             res.setdefault("ok", True)
@@ -1434,21 +1447,21 @@ class IntercomAPI:
     async def open_relay_by_door_id(self, door_id: str):
         payload = {"doorId": door_id}
         res = await self._post("/client-api/Device/OpenRelayByDoorId", payload, need_auth=True, expect="text")
-        if isinstance(res, dict) and "error" in res:
+        if is_api_error(res):
             return res
         return {"ok": True, "body": res}
 
     async def open_relay_by_key_id(self, key_id: str):
         payload = {"keyId": key_id}
         res = await self._post("/client-api/Device/OpenRelayByKeyId", payload, need_auth=True, expect="text")
-        if isinstance(res, dict) and "error" in res:
+        if is_api_error(res):
             return res
         return {"ok": True, "body": res}
 
     async def answer_call_notify(self, call_id: str):
         payload = {"callId": call_id}
         res = await self._post("/communication-api/Call/NotifyCallAnswered", payload, need_auth=True, expect="text")
-        if isinstance(res, dict) and "error" in res:
+        if is_api_error(res):
             return res
         _LOGGER.debug("answer_call_notify(%s) -> %s", call_id, res)
         return {"ok": True, "body": res}
@@ -1670,7 +1683,7 @@ class IntercomAPI:
     async def end_call_notify(self, call_id: str):
         payload = {"callId": call_id}
         res = await self._post("/communication-api/Call/NotifyCallEnded", payload, need_auth=True, expect="text")
-        if isinstance(res, dict) and "error" in res:
+        if is_api_error(res):
             return res
         _LOGGER.debug("end_call_notify(%s) -> %s", call_id, res)
         return {"ok": True, "body": res}
@@ -1682,7 +1695,7 @@ class IntercomAPI:
             expect="json",
             header_set=self.signalr_headers(),
         )
-        if not isinstance(res, dict) or ("error" in res and "status" in res):
+        if not isinstance(res, dict) or is_api_error(res):
             _LOGGER.debug("negotiate failed: %s", res)
             return None
         _LOGGER.debug("negotiate response: %s", res)

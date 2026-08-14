@@ -6,7 +6,7 @@ from random import uniform
 from typing import Callable, Optional, Any, Union
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from .api import IntercomAPI
+from .api import IntercomAPI, is_api_error
 from .const import (
     EVENT_INCOMING_CALL,
     EVENT_CALL_ENDED,
@@ -343,7 +343,7 @@ class IntercomNotifyConsumer:
                     type(response).__name__,
                 )
                 return None
-            if "error" in response:
+            if is_api_error(response):
                 _LOGGER.debug("Failed to load Domonap call logs: %s", response)
                 return None
 

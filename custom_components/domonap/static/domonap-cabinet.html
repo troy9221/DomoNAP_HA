@@ -65,8 +65,7 @@
       el.textContent = text || "";
     }
     function ticketsState() {
-      const h = hass();
-      return findState("_support_tickets") || (h && h.states["sensor.domonap_9164270777_9164270777_support_tickets"]);
+      return findState("_support_tickets");
     }
     function allTickets() {
       const st = ticketsState();
@@ -191,7 +190,7 @@
     }
 
     function renderFace(h) {
-      const st = findState("_face_pass") || h.states["sensor.domonap_9164270777_9164270777_face_pass"];
+      const st = findState("_face_pass");
       const faces = (st && st.attributes && st.attributes.faces) || [];
       const imgs = Object.values(h.states).filter((s) => s.entity_id.startsWith("image.") && s.entity_id.includes("_face_"));
       const grid = faces.length ? faces.map((f) => {
@@ -209,7 +208,7 @@
           <button type="button" class="cam">Сфотографировать</button>
           <button type="button" class="gal sec">Из галереи</button>
         </div>
-        <input class="cam-in" type="file" accept="image/*" capture="environment">
+        <input class="cam-in" type="file" accept="image/*" capture="user">
         <input class="gal-in" type="file" accept="image/*" multiple>
         <div class="status"></div>`;
       app.querySelector(".cam").onclick = () => app.querySelector(".cam-in").click();

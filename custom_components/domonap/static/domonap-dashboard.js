@@ -1,6 +1,4 @@
 (() => {
-  const CABINET = "/domonap-static/domonap-cabinet.html";
-
   function attr(state, key) {
     return state && state.attributes ? state.attributes[key] : undefined;
   }
@@ -209,7 +207,7 @@
     return cards;
   }
 
-  function iframeView(title, path, icon, mode) {
+  function cabinetView(title, path, icon, mode) {
     return {
       title,
       path,
@@ -217,9 +215,8 @@
       type: "panel",
       cards: [
         {
-          type: "iframe",
-          url: CABINET + "?mode=" + mode + "&v=1.4.1",
-          tap_action: { action: "none" },
+          type: "custom:domonap-cabinet-card",
+          mode,
         },
       ],
     };
@@ -275,10 +272,11 @@
             const pin = pinFor(button, data.pins);
             if (pin) pinEntities.push(pin);
           });
-          const cards = [
-            ...lastCallCards(data.lastCall, data.lastCallButton),
-            ...callCards,
-          ];
+          const cards = [];
+          if (index === 0) {
+            cards.push(...lastCallCards(data.lastCall, data.lastCallButton));
+          }
+          cards.push(...callCards);
           const grid = doorGrid(withCamera);
           if (grid) cards.push(grid);
           const list = otherList(withoutCamera, pinEntities);
@@ -298,17 +296,31 @@
         });
       }
 
-      views.push(iframeView("Поддержка", "support", "mdi:headset", "support"));
-      views.push(iframeView("Аватары", "face", "mdi:face-recognition", "face"));
+      views.push(cabinetView("Поддержка", "support", "mdi:headset", "support"));
+      views.push(cabinetView("Аватары", "face", "mdi:face-recognition", "face"));
       return { title: "Домофон", views };
     }
 
     static shouldRegenerate(_config, oldHass, newHass) {
       return doorSignature(oldHass) !== doorSignature(newHass);
     }
+
+    static getCreateSuggestions(_hass) {
+      return { title: "Домофон", icon: "mdi:doorbell-video" };
+    }
   }
 
-  ["ll-strategy-domonap", "ll-strategy-dashboard-domonap", "ll-strategy-custom-domonap"].forEach((tag) => {
+  ["ll-strategy-domonap", "ll-strategy-dashboard-domonap"].forEach((tag) => {
     if (!customElements.get(tag)) customElements.define(tag, DomonapDashboardStrategy);
   });
+  window.customStrategies = window.customStrategies || [];
+  if (!window.customStrategies.some((item) => item && item.type === "domonap")) {
+    window.customStrategies.push({
+      type: "domonap",
+      strategyType: "dashboard",
+      name: "Домофон",
+      description: "Двери аккаунта DomoNAP, поддержка и проход по лицу",
+      documentationURL: "https://github.com/troy9221/DomoNAP_HA",
+    });
+  }
 })();

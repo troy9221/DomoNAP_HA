@@ -23,6 +23,7 @@ from .const import (
     PLATFORMS,
     UPDATE_COORDINATOR,
     WEBRTC_PROXY,
+    DASHBOARD_SETUP_FLAG,
     CONF_REGISTER_DEVICE_TOKEN,
     EVENT_RECEIVE_MESSAGE,
 )
@@ -226,7 +227,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             _LOGGER.debug("Exception while closing API client", exc_info=True)
 
     hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
-    non_entry_keys = {WEBRTC_PROXY, MEDIA_PROXY, UPDATE_COORDINATOR}
+    non_entry_keys = {WEBRTC_PROXY, MEDIA_PROXY, UPDATE_COORDINATOR, DASHBOARD_SETUP_FLAG}
     remaining_entries = [
         key for key in hass.data.get(DOMAIN, {}) if key not in non_entry_keys
     ]

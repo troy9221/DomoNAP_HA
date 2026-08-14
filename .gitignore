@@ -1,3 +1,6 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
 examples/automation_incoming_call_push.yaml
 examples/automations_full_example.yaml
 home-assistant_2026-07-02T18-48-09.828Z.log

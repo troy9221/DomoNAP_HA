@@ -9,7 +9,16 @@ from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import HomeAssistantError
 import homeassistant.helpers.config_validation as cv
 
-from .const import ACCOUNT_COORDINATOR, DOMAIN, API, WEBRTC_PROXY, MEDIA_PROXY, UPDATE_COORDINATOR
+from .const import (
+    ACCOUNT_COORDINATOR,
+    DASHBOARD_SETUP_FLAG,
+    DOMAIN,
+    API,
+    FACE_MAX_BYTES,
+    WEBRTC_PROXY,
+    MEDIA_PROXY,
+    UPDATE_COORDINATOR,
+)
 from .api import is_api_error
 from .util import (
     INVALID_LAST_CALL_STATES,
@@ -107,7 +116,9 @@ SERVICE_DELETE_FACE_SCHEMA = vol.Schema(
 
 
 # Service keys stored under hass.data[DOMAIN] that are NOT config entries.
-_NON_ENTRY_KEYS = frozenset({WEBRTC_PROXY, MEDIA_PROXY, UPDATE_COORDINATOR})
+_NON_ENTRY_KEYS = frozenset(
+    {WEBRTC_PROXY, MEDIA_PROXY, UPDATE_COORDINATOR, DASHBOARD_SETUP_FLAG}
+)
 
 
 def _is_entry_bucket(value: Any) -> bool:
@@ -418,6 +429,8 @@ async def async_setup_actions(hass: HomeAssistant) -> None:
                     f"Failed to download face image: {downloaded.get('error')}"
                 )
             body = downloaded["body"]
+        if len(body) > FACE_MAX_BYTES:
+            raise HomeAssistantError("Фото больше 8 МБ")
         res = await api.create_face(
             body,
             filename=filename,

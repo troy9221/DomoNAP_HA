@@ -317,12 +317,60 @@ def test_domonap_dashboard_config_helper():
     )
     assert not const.is_domonap_dashboard_config({"views": []})
     assert not const.is_domonap_dashboard_config(None)
+    assert const.FACE_MAX_BYTES == 8 * 1024 * 1024
+
+
+def test_dashboard_js_registers_official_strategy_tag():
+    text = (
+        ROOT / "custom_components" / "domonap" / "static" / "domonap-dashboard.js"
+    ).read_text()
+    assert "ll-strategy-dashboard-domonap" in text
+    assert "custom:domonap-cabinet-card" in text
+    assert "window.customStrategies" in text
+    assert "iframe" not in text
+    assert "9164270777" not in text
+
+
+def test_cabinet_html_has_no_hardcoded_phone():
+    text = (
+        ROOT / "custom_components" / "domonap" / "static" / "domonap-cabinet.html"
+    ).read_text()
+    assert "9164270777" not in text
+    assert 'capture="user"' in text
+
+
+def test_summarize_ticket_omits_empty_messages():
+    summary = api.summarize_ticket({"id": "t1", "themeHeader": "Lift", "text": "Hi"})
+    assert "messages" not in summary
+    with_msgs = api.summarize_ticket(
+        {"id": "t2", "messages": [{"text": "ok", "isSupport": True}]}
+    )
+    assert with_msgs["messages"][0]["text"] == "ok"
 
 
 def test_is_api_error():
     assert api.is_api_error({"error": "HTTP 401", "status": 401})
+    assert api.is_api_error({"error": "Session expired", "ok": False, "body": ""})
+    assert api.is_api_error({"error": "No access token available", "ok": False})
+    assert not api.is_api_error({"error": None, "results": [{"id": "k1"}]})
+    assert not api.is_api_error({"error": "", "results": []})
     assert not api.is_api_error({"faceImages": []})
     assert not api.is_api_error("ok")
+
+
+def test_fetch_keys_by_type_ignores_null_error():
+    client = IntercomAPI()
+
+    async def fake_get_paged_keys(**kwargs):
+        return {
+            "error": None,
+            "results": [{"id": "k1", "name": "Door", "doorId": "d1"}],
+            "pageCount": 1,
+        }
+
+    client.get_paged_keys = fake_get_paged_keys
+    keys = asyncio.run(client._fetch_keys_by_type(0))
+    assert keys[0]["id"] == "k1"
 
 
 def test_fetch_keys_by_type_handles_non_dict_payload():
