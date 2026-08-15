@@ -138,3 +138,29 @@ def parse_github_release_payload(payload: object) -> dict | None:
 
 def github_tag_archive_url(tag: str) -> str:
     return f"https://github.com/{GITHUB_REPO}/archive/refs/tags/{tag}.zip"
+
+
+def planned_lovelace_resource_changes(
+    items: list | None, wanted_urls: list[str]
+) -> tuple[list[str], list[tuple[object, str]]]:
+    """Какие Lovelace JS-ресурсы создать и какие обновить (?v=)."""
+    by_path: dict[str, dict] = {}
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        path = str(item.get("url") or "").split("?")[0]
+        if path:
+            by_path[path] = item
+    to_create: list[str] = []
+    to_update: list[tuple[object, str]] = []
+    for url in wanted_urls:
+        path = url.split("?")[0]
+        existing = by_path.get(path)
+        if existing is None:
+            to_create.append(url)
+            continue
+        current = str(existing.get("url") or "")
+        item_id = existing.get("id")
+        if current != url and item_id is not None:
+            to_update.append((item_id, url))
+    return to_create, to_update

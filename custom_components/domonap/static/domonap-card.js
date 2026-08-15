@@ -16,16 +16,16 @@ textarea { width:100%; min-height:96px; box-sizing:border-box; border-radius:12p
 .msg { padding:8px 0; border-bottom:1px solid var(--divider-color); white-space:pre-wrap; }
 .msg b { display:block; font-size:.85rem; opacity:.8; }
 .status { margin-top:8px; font-size:.9rem; }
-.faces { display:grid; grid-template-columns: repeat(auto-fill, minmax(140px,1fr)); gap:10px; }
-.face { border:1px solid var(--divider-color); border-radius:12px; overflow:hidden; display:flex; flex-direction:column; }
-.face .thumb { display:block; width:100%; height:140px; padding:0; margin:0; border:0; border-radius:0;
-  background:#111; cursor:zoom-in; overflow:hidden; }
+.faces { display:flex; flex-wrap:wrap; gap:12px; align-items:flex-start; }
+.face { width:156px; flex:0 0 156px; box-sizing:border-box; border:1px solid var(--divider-color); border-radius:12px; overflow:hidden; display:flex; flex-direction:column; }
+.face .thumb { display:block; width:100%; height:156px; padding:0; margin:0; border:0; border-radius:0;
+  background:#111; cursor:zoom-in; overflow:hidden; box-sizing:border-box; }
 .face .thumb:disabled { cursor:default; opacity:1; }
-.face .thumb img, .face .ph { width:100%; height:140px; object-fit:cover; background:#111; display:block; pointer-events:none; }
-.face .cap { padding:8px; display:flex; flex-direction:column; gap:8px; align-items:stretch; }
+.face .thumb img, .face .ph { width:100%; height:156px; object-fit:cover; background:#111; display:block; pointer-events:none; }
+.face .cap { padding:8px; display:flex; flex-direction:column; gap:8px; align-items:stretch; box-sizing:border-box; }
 .face .uid { font-size:.75rem; opacity:.75; line-height:1.3; text-align:center;
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.face .del { width:100%; }
+.face .del { width:100%; max-width:100%; box-sizing:border-box; }
 dialog.lightbox { border:0; margin:0; padding:48px 16px 16px; width:100vw; height:100vh;
   max-width:none; max-height:none; background:rgba(0,0,0,.88); box-sizing:border-box; }
 dialog.lightbox[open] { display:flex; align-items:center; justify-content:center; }
@@ -174,7 +174,7 @@ class DomonapCabinetCard extends HTMLElement {
   }
   _faceHtml() {
     return `<h2>Проход по лицу</h2>
-      <p class="hint">Сфотографируйте себя или выберите снимки из галереи. С iPhone лучше JPEG, не HEIC: фото перекодируется автоматически.</p>
+      <p class="hint">Нажмите миниатюру, чтобы открыть фото целиком. Снять можно камерой или выбрать из галереи. С iPhone снимок перекодируется в JPEG.</p>
       <div class="faces"></div>
       <div class="row">
         <button class="cam">Сфотографировать</button>
@@ -275,6 +275,9 @@ class DomonapCabinetCard extends HTMLElement {
   _faceIdLabel(imageId) {
     const id = String(imageId || "");
     if (!id) return "—";
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+      return id.slice(0, 8);
+    }
     return id.length > 10 ? id.slice(-8) : id;
   }
   _openFacePreview(src) {
