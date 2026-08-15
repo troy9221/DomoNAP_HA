@@ -51,11 +51,13 @@
         cameras.push(state);
         return;
       }
-      if (id.startsWith("binary_sensor.") && doorIdOf(state) && id.indexOf("incoming_call") !== -1) {
+      // Не ищем "incoming_call" / "door_code" в entity_id: в русской HA
+      // object_id берётся из перевода («входящий звонок», «код двери»).
+      if (id.startsWith("binary_sensor.") && doorIdOf(state)) {
         calls.push(state);
         return;
       }
-      if (id.startsWith("sensor.") && id.indexOf("door_code") !== -1 && doorIdOf(state)) {
+      if (id.startsWith("sensor.") && doorIdOf(state) && attr(state, "domofonPublicPin")) {
         pins.push(state);
       }
     });

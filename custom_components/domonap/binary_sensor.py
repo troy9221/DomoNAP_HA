@@ -31,6 +31,8 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
     seen_door_ids = set()
 
     for key in keys:
+        if not isinstance(key, dict):
+            continue
         key_id = key.get("id")
         door_id = key.get("doorId")
         door_name = key.get("name")
@@ -120,25 +122,26 @@ class IntercomCallBinarySensor(BinarySensorEntity):
     @callback
     def _handle_incoming_call(self, event):
         door_id = event.data.get("DoorId")
-        if door_id == self._door_id:
-            _LOGGER.debug(
-                "Incoming call detected for door %s (%s)", self._door_id, self._name
-            )
-            self._state = True
-            self.async_write_ha_state()
+        if door_id is None or str(door_id) != str(self._door_id):
+            return
+        _LOGGER.debug(
+            "Incoming call detected for door %s (%s)", self._door_id, self._name
+        )
+        self._state = True
+        self.async_write_ha_state()
             
-            if self._reset_timer:
-                self._reset_timer()
+        if self._reset_timer:
+            self._reset_timer()
             
-            self._reset_timer = async_call_later(
-                self._hass, RESET_DELAY, self._reset_state
-            )
+        self._reset_timer = async_call_later(
+            self._hass, RESET_DELAY, self._reset_state
+        )
 
     @callback
     def _handle_call_ended(self, event):
         door_id = event.data.get("DoorId")
         # If DoorId is resolvable, only reset the matching sensor; otherwise reset any active call.
-        if door_id and door_id != self._door_id:
+        if door_id and str(door_id) != str(self._door_id):
             return
         if not self._state:
             return

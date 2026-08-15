@@ -6,7 +6,7 @@ from random import uniform
 from typing import Callable, Optional, Any, Union
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from .api import IntercomAPI, is_api_error
+from .api import IntercomAPI, extract_api_list, is_api_error
 from .const import (
     EVENT_INCOMING_CALL,
     EVENT_CALL_ENDED,
@@ -325,42 +325,31 @@ class IntercomNotifyConsumer:
             push_data["photoUrl"] = proxied_video_preview or video_preview
 
     async def _get_call_log_photo_url(self, call_id: str) -> Optional[str]:
+        # Один запрос без паузы: ретраи с sleep задерживали EVENT_INCOMING_CALL
+        # и бинарный сенсор звонка. Если фото ещё нет — берём VideoPreview.
         if not call_id:
             return None
 
-        for attempt in range(3):
-            if attempt:
-                await asyncio.sleep(1)
+        try:
+            response = await self._api.get_call_logs(per_page=20, current_page=1)
+        except Exception:
+            _LOGGER.debug("Failed to load Domonap call logs", exc_info=True)
+            return None
+        if is_api_error(response):
+            _LOGGER.debug("Failed to load Domonap call logs: %s", response)
+            return None
 
-            try:
-                response = await self._api.get_call_logs(per_page=20, current_page=1)
-            except Exception:
-                _LOGGER.debug("Failed to load Domonap call logs", exc_info=True)
-                return None
-            if not isinstance(response, dict):
-                _LOGGER.debug(
-                    "Unexpected Domonap call logs payload: %s",
-                    type(response).__name__,
-                )
-                return None
-            if is_api_error(response):
-                _LOGGER.debug("Failed to load Domonap call logs: %s", response)
-                return None
-
-            call_logs = response.get("results", [])
-            if not isinstance(call_logs, list):
-                _LOGGER.debug("Unexpected Domonap call logs results: %s", call_logs)
-                return None
-
-            for call_log in call_logs:
-                if not isinstance(call_log, dict):
-                    continue
-                if str(call_log.get("callId", "")) != call_id:
-                    continue
-                photo_url = call_log.get("photoUrl")
-                if photo_url:
-                    return photo_url
-                return None
+        call_logs = extract_api_list(response, "results", "items")
+        for call_log in call_logs:
+            if not isinstance(call_log, dict):
+                continue
+            log_call_id = call_log.get("callId") or call_log.get("CallId")
+            if str(log_call_id or "") != call_id:
+                continue
+            photo_url = call_log.get("photoUrl") or call_log.get("PhotoUrl")
+            if photo_url:
+                return photo_url
+            return None
 
         _LOGGER.debug("Call log photoUrl not found for call %s", call_id)
         return None

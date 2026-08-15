@@ -25,7 +25,7 @@ except ImportError:
     WebRTCSendMessage = None
 
 from .const import API, DOMAIN, PARAM_WEBRTC_PROXY_SECRET, WEBRTC_PROXY
-from .api import is_api_error
+from .api import extract_api_list, is_api_error
 from .webrtc_proxy import _resolve_upstream_session_url
 
 _LOGGER = logging.getLogger(__name__)
@@ -95,6 +95,8 @@ def _build_key_camera_entities(api, proxy, proxy_secret: str | None, response) -
 
     entities: list[Camera] = []
     for key in response.get("results", []):
+        if not isinstance(key, dict):
+            continue
         key_id = key.get("id")
         name = key.get("name")
         address = key.get("addressString")
@@ -134,15 +136,16 @@ async def _build_video_camera_entities(api, proxy, proxy_secret: str | None, res
         _log_api_error("Loading Domonap video areas", response)
         return []
 
-    if not isinstance(response, list):
-        if response is not None:
-            _LOGGER.warning(
-                "Unexpected Domonap video areas payload: %s", type(response).__name__
-            )
+    if response is not None and not isinstance(response, (list, dict)):
+        _LOGGER.warning(
+            "Unexpected Domonap video areas payload: %s", type(response).__name__
+        )
         return []
 
+    areas = _payload_items(response)
+
     categories: list[str] = []
-    for area in response:
+    for area in areas:
         if not isinstance(area, dict):
             continue
         category = area.get("category")
@@ -175,7 +178,8 @@ async def _build_video_camera_entities(api, proxy, proxy_secret: str | None, res
             )
             continue
 
-        if not isinstance(category_response, list):
+        cameras = _payload_items(category_response)
+        if not isinstance(category_response, (list, dict)):
             _LOGGER.warning(
                 "Unexpected Domonap cameras payload for category %s: %s",
                 category,
@@ -184,7 +188,7 @@ async def _build_video_camera_entities(api, proxy, proxy_secret: str | None, res
             continue
 
         category_name = CAMERA_CATEGORY_NAMES.get(category, category)
-        for camera in category_response:
+        for camera in cameras:
             entity = _make_video_camera_entity(
                 api,
                 proxy,
@@ -247,6 +251,15 @@ def _make_video_camera_entity(
         preserve_via_device=False,
         address=address,
     )
+
+
+def _payload_items(payload) -> list:
+    """Достать список из ответа API: голый list или .NET {results/items}."""
+    if isinstance(payload, list):
+        return [item for item in payload if item is not None]
+    if isinstance(payload, dict):
+        return extract_api_list(payload)
+    return []
 
 
 def _log_api_error(context: str, response: dict) -> None:

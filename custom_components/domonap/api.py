@@ -370,6 +370,25 @@ def normalize_ticket_messages(payload: Any) -> list[dict]:
     return messages[-40:]
 
 
+_REDACT_PAYLOAD_KEYS = {
+    "refreshToken",
+    "accessToken",
+    "confirmCode",
+    "deviceToken",
+    "completeToken",
+}
+
+
+def _redact_payload(payload: Any) -> Any:
+    """Не писать токены и SMS-коды в лог при ошибке HTTP."""
+    if not isinstance(payload, dict):
+        return payload
+    return {
+        key: "***" if key in _REDACT_PAYLOAD_KEYS else value
+        for key, value in payload.items()
+    }
+
+
 def _with_app_header_suffix(value: str) -> str:
     return value if value.endswith(";") else f"{value};"
 
@@ -646,15 +665,23 @@ class IntercomAPI:
                     pass
                 err = {
                     "error": f"HTTP {resp.status}",
+                    "ok": False,
                     "status": resp.status,
                     "body": body_text[:2000],
                 }
                 _LOGGER.error(
-                    "Request failed: POST %s payload=%s -> %s", path, payload, err
+                    "Request failed: POST %s payload=%s -> %s",
+                    path,
+                    _redact_payload(payload),
+                    err,
                 )
                 return err
 
-        result = await _once()
+        try:
+            result = await _once()
+        except (aiohttp.ClientError, asyncio.TimeoutError) as err:
+            _LOGGER.error("Request failed: POST %s -> %s", path, err)
+            return {"error": str(err), "ok": False, "body": ""}
         if (
             retry_on_401
             and self.refresh_token
@@ -663,7 +690,11 @@ class IntercomAPI:
         ):
             _LOGGER.warning("401 Unauthorized, refreshing token and retrying %s", path)
             if await self._refresh_for_retry(first_try_access_token):
-                result = await _once()
+                try:
+                    result = await _once()
+                except (aiohttp.ClientError, asyncio.TimeoutError) as err:
+                    _LOGGER.error("Request retry failed: POST %s -> %s", path, err)
+                    return {"error": str(err), "ok": False, "body": ""}
         return result
 
     async def _post_multipart(
@@ -717,13 +748,18 @@ class IntercomAPI:
                     pass
                 err = {
                     "error": f"HTTP {resp.status}",
+                    "ok": False,
                     "status": resp.status,
                     "body": body_text[:2000],
                 }
                 _LOGGER.error("Request failed: POST %s multipart -> %s", path, err)
                 return err
 
-        result = await _once()
+        try:
+            result = await _once()
+        except (aiohttp.ClientError, asyncio.TimeoutError) as err:
+            _LOGGER.error("Request failed: POST %s multipart -> %s", path, err)
+            return {"error": str(err), "ok": False, "body": ""}
         if (
             retry_on_401
             and self.refresh_token
@@ -732,7 +768,13 @@ class IntercomAPI:
         ):
             _LOGGER.warning("401 Unauthorized, refreshing token and retrying %s", path)
             if await self._refresh_for_retry(first_try_access_token):
-                result = await _once()
+                try:
+                    result = await _once()
+                except (aiohttp.ClientError, asyncio.TimeoutError) as err:
+                    _LOGGER.error(
+                        "Request retry failed: POST %s multipart -> %s", path, err
+                    )
+                    return {"error": str(err), "ok": False, "body": ""}
         return result
 
     async def update_device_token(self, device_token: str) -> bool:
@@ -888,9 +930,13 @@ class IntercomAPI:
                 )
                 return []
 
-            keys = keys_data.get("results", [])
+            keys = [
+                item
+                for item in extract_api_list(keys_data, "results", "items")
+                if isinstance(item, dict)
+            ]
             if keys:
-                key_names = [str(k.get("name")) for k in keys if isinstance(k, dict)]
+                key_names = [str(k.get("name")) for k in keys]
                 _LOGGER.debug(
                     "Found %d keys of type '%s' on page %d: %s",
                     len(keys), type_label, current_page, key_names,
@@ -997,6 +1043,8 @@ class IntercomAPI:
         # Ключи без doorId (если такие есть) дедуплицируются по key id.
         unique_keys: dict = {}
         for key in all_keys:
+            if not isinstance(key, dict):
+                continue
             door_id = key.get("doorId")
             dedup_key = ("door", door_id) if door_id else ("id", key.get("id"))
             if dedup_key[1] is None:
@@ -1197,7 +1245,11 @@ class IntercomAPI:
         )
 
     async def get_all_tickets(self, search: str = "", per_page: int = 50, max_pages: int = 10):
-        """Все обращения: в APK список — AppealsList + paging (AppealItemPagingSource)."""
+        """Все обращения: в APK список — AppealsList + paging (AppealItemPagingSource).
+
+        Возвращает ``None``, если первая страница не загрузилась — вызывающий
+        код должен сохранить предыдущий снимок, а не затирать список.
+        """
         tickets: list[dict] = []
         seen: set[str] = set()
         for page in range(1, max_pages + 1):
@@ -1207,6 +1259,7 @@ class IntercomAPI:
             if is_api_error(payload):
                 if page == 1:
                     _LOGGER.warning("GetPagedTickets failed: %s", payload)
+                    return None
                 break
             items = normalize_ticket_items(payload)
             if not items:
@@ -1532,8 +1585,11 @@ class IntercomAPI:
         return request_headers
 
     async def _ensure_external_auth(self) -> Optional[Dict[str, Any]]:
+        if self._refresh_token_invalid:
+            return self._refresh_unavailable_error("Session expired")
         if not self.access_token:
-            return {"ok": False, "error": "No access token available", "body": ""}
+            if not await self._refresh_for_retry(None):
+                return {"ok": False, "error": "No access token available", "body": ""}
         await self._ensure_alive()
         if not self.access_token:
             return self._refresh_unavailable_error("Session expired")
