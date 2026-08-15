@@ -347,6 +347,11 @@ def test_dashboard_js_groups_by_street_and_kind():
     assert "parts.slice(-2)" not in text
     assert "allCallCards" in text
     assert "Калитки и входы" in text
+    assert 'name: "Открыть"' in text
+    assert 'icon_height: "36px"' in text
+    assert "siteHeader" in text
+    assert "vertical-stack" in text
+    assert "Открыть · " not in text
 
 
 def _dashboard_building_of(address: str) -> str:
@@ -438,6 +443,35 @@ def test_dashboard_grouping_matches_manual_domofon_tabs():
     for address, name, kind, building in cases:
         assert _dashboard_door_kind(address, name) == kind, name
         assert _dashboard_building_of(address) == building, address
+
+
+def _dashboard_clean_name(raw: str) -> str:
+    import re
+
+    name = re.sub(r"\s*Открыть дверь\s*$", "", raw or "", flags=re.I).strip()
+    name = re.sub(r"\s*#[0-9a-fA-F]{4,}\s*$", "", name, flags=re.I).strip()
+    name = re.sub(
+        r"\s*\([^)]*(?:улица|ул\.|д\.|паркинг|кладов|машиномест|место\.)[^)]*\)\s*",
+        " ",
+        name,
+        flags=re.I,
+    ).strip()
+    name = re.sub(r"\s*\([^)]{12,}\)\s*$", "", name).strip()
+    name = re.sub(r"\s{2,}", " ", name).strip()
+    return name or raw
+
+
+def test_dashboard_clean_name_strips_long_address():
+    raw = (
+        "Вход в подвал (улица Малое Понизовье, д.3, п.5, э.-1, кладовка.140) "
+        "#623e97 Открыть дверь"
+    )
+    assert _dashboard_clean_name(raw) == "Вход в подвал"
+    assert "Малое" not in _dashboard_clean_name(raw)
+    assert _dashboard_clean_name(
+        "Калитка 1 (Паркинг : ул. Малое Понизовье, д.1А, п.1, э.1, место.122)"
+    ) == "Калитка 1"
+
 
 
 def test_cabinet_html_has_no_hardcoded_phone():
@@ -621,14 +655,14 @@ def test_lovelace_resource_query_is_updated_on_version_bump():
         {"id": "r2", "url": "/domonap-static/domonap-dashboard.js?v=1.4.4"},
     ]
     wanted = [
-        "/domonap-static/domonap-card.js?v=1.4.7",
-        "/domonap-static/domonap-dashboard.js?v=1.4.7",
+        "/domonap-static/domonap-card.js?v=1.4.8",
+        "/domonap-static/domonap-dashboard.js?v=1.4.8",
     ]
     to_create, to_update = const.planned_lovelace_resource_changes(items, wanted)
     assert to_create == []
     assert to_update == [
-        ("r1", "/domonap-static/domonap-card.js?v=1.4.7"),
-        ("r2", "/domonap-static/domonap-dashboard.js?v=1.4.7"),
+        ("r1", "/domonap-static/domonap-card.js?v=1.4.8"),
+        ("r2", "/domonap-static/domonap-dashboard.js?v=1.4.8"),
     ]
     to_create, to_update = const.planned_lovelace_resource_changes([], wanted)
     assert to_create == wanted
