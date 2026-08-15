@@ -20,6 +20,7 @@ from .const import (
     UPDATE_COORDINATOR,
 )
 from .api import is_api_error
+from .face_image import FaceImageError, format_face_upload_error, normalize_face_meta, prepare_face_jpeg
 from .util import (
     INVALID_LAST_CALL_STATES,
     extract_phone_digits,
@@ -163,16 +164,7 @@ def _require_entry_api(hass: HomeAssistant, requested_entry_id: str | None) -> t
 
 def _guess_image_meta(url: str, filename: str | None) -> tuple[str, str]:
     name = filename or url.rsplit("/", 1)[-1].split("?", 1)[0] or "face.jpg"
-    lower = name.lower()
-    if lower.endswith(".png"):
-        return name, "image/png"
-    if lower.endswith(".webp"):
-        return name, "image/webp"
-    if lower.endswith(".heic") or lower.endswith(".heif"):
-        return name, "image/heic"
-    if not lower.endswith((".jpg", ".jpeg")):
-        name = f"{name}.jpg" if "." not in name else name
-    return name, "image/jpeg"
+    return normalize_face_meta(name, None)
 
 
 def _www_root(hass: HomeAssistant) -> Path:
@@ -431,13 +423,23 @@ async def async_setup_actions(hass: HomeAssistant) -> None:
             body = downloaded["body"]
         if len(body) > FACE_MAX_BYTES:
             raise HomeAssistantError("Фото больше 8 МБ")
+        try:
+            body, filename, content_type = await hass.async_add_executor_job(
+                prepare_face_jpeg, body, filename, content_type
+            )
+        except FaceImageError as err:
+            raise HomeAssistantError(str(err)) from err
+        if len(body) > FACE_MAX_BYTES:
+            raise HomeAssistantError("Фото больше 8 МБ")
         res = await api.create_face(
             body,
             filename=filename,
             content_type=content_type,
         )
         if is_api_error(res):
-            raise HomeAssistantError(f"Failed to register face: {res}")
+            raise HomeAssistantError(
+                f"Failed to register face: {format_face_upload_error(filename, res)}"
+            )
         await _refresh_account(hass, entry_id)
         return {"status": "ok", "config_entry_id": entry_id, "response": res}
 

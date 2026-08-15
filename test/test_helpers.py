@@ -5,6 +5,8 @@ import types
 import uuid
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 API_PATH = ROOT / "custom_components" / "domonap" / "api.py"
 CONST_PATH = ROOT / "custom_components" / "domonap" / "const.py"
@@ -338,6 +340,7 @@ def test_cabinet_html_has_no_hardcoded_phone():
     ).read_text()
     assert "9164270777" not in text
     assert 'capture="user"' in text
+    assert "jpegFromGalleryFile" in text
 
 
 def test_summarize_ticket_omits_empty_messages():
@@ -466,3 +469,85 @@ def test_cabinet_card_guards_double_custom_element_define():
     ).read_text()
     assert 'customElements.get("domonap-cabinet-card")' in text
     assert "domonap-cabinet-card" in text
+    assert "jpegFromGalleryFile" in text
+    assert 'type: "image/jpeg"' in text
+
+
+FACE_IMAGE_PATH = ROOT / "custom_components" / "domonap" / "face_image.py"
+face_image = _load_module("domonap_face_image", FACE_IMAGE_PATH)
+
+
+def test_iphone_jpeg_filename_becomes_jpg():
+    name, ctype = api._normalize_face_upload_meta("IMG_2940.jpeg", "image/jpeg")
+    assert name == "IMG_2940.jpg"
+    assert ctype == "image/jpeg"
+    name, ctype = api._normalize_face_upload_meta("photo.JPG", "image/jpg")
+    assert name == "photo.jpg"
+    assert ctype == "image/jpeg"
+    name, ctype = face_image.normalize_face_meta("IMG_2940.jpeg", "image/jpeg")
+    assert name == "IMG_2940.jpg"
+    assert ctype == "image/jpeg"
+
+
+def test_sniff_image_type():
+    assert face_image.sniff_image_type(b"\xff\xd8\xff\xe0" + b"\x00" * 12) == "jpeg"
+    assert face_image.sniff_image_type(b"\x89PNG\r\n\x1a\n" + b"\x00" * 8) == "png"
+    assert face_image.sniff_image_type(b"RIFF" + b"\x00" * 4 + b"WEBP") == "webp"
+    assert face_image.sniff_image_type(b"\x00\x00\x00\x18ftypheic" + b"\x00" * 8) == "heic"
+    assert face_image.sniff_image_type(b"not-an-image") is None
+
+
+def test_prepare_face_jpeg_renames_iphone_file():
+    jpeg = b"\xff\xd8\xff" + b"\x00" * 32
+    data, name, ctype = face_image.prepare_face_jpeg(
+        jpeg, "IMG_2940.jpeg", "image/jpeg"
+    )
+    assert data.startswith(b"\xff\xd8\xff")
+    assert name == "IMG_2940.jpg"
+    assert ctype == "image/jpeg"
+
+
+def test_prepare_face_heic_without_decoder_raises():
+    heic = b"\x00\x00\x00\x18ftypheic" + b"\x00" * 32
+    try:
+        face_image.prepare_face_jpeg(heic, "IMG_2940.HEIC", "image/heic")
+    except face_image.FaceImageError as err:
+        assert "HEIC" in str(err)
+    else:
+        raise AssertionError("expected FaceImageError for HEIC")
+
+
+def test_format_face_upload_error_hides_raw_http_400():
+    payload = {
+        "error": "HTTP 400",
+        "ok": False,
+        "status": 400,
+        "body": '{"statusCode":400,"statusText":"BAD_REQUEST","errorText":"Некорректный запрос."}',
+    }
+    text = face_image.format_face_upload_error("IMG_2940.jpg", payload)
+    assert "IMG_2940.jpg" in text
+    assert "JPEG" in text
+    assert "HTTP 400" not in text
+    assert "{'error'" not in text
+
+
+def test_face_name_from_iphone_filename():
+    assert face_image.face_name_from_filename("IMG_2940.jpeg") == "IMG_2940"
+    assert api._face_name_from_filename("IMG_2940.jpg") == "IMG_2940"
+
+
+def test_prepare_face_jpeg_with_pillow_resizes_and_renames():
+    pytest.importorskip("PIL")
+    import io
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (2000, 1000), (10, 20, 30)).save(buf, format="JPEG", quality=90)
+    data, name, ctype = face_image.prepare_face_jpeg(
+        buf.getvalue(), "IMG_2940.jpeg", "image/jpeg"
+    )
+    assert name == "IMG_2940.jpg"
+    assert ctype == "image/jpeg"
+    out = Image.open(io.BytesIO(data))
+    assert out.format == "JPEG"
+    assert max(out.size) <= face_image.FACE_JPEG_MAX_EDGE

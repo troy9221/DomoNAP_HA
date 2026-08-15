@@ -9,31 +9,24 @@ from homeassistant.core import HomeAssistant
 
 from .actions import _require_entry_api, _refresh_account
 from .api import is_api_error
+from .face_image import (
+    FaceImageError,
+    format_face_upload_error,
+    normalize_face_meta,
+    prepare_face_jpeg,
+)
 from .const import FACE_MAX_BYTES
 from .dashboard import async_setup_dashboard
 
 _LOGGER = logging.getLogger(__name__)
 
 _JS_FILES = ("domonap-card.js", "domonap-dashboard.js")
-_JS_VERSION = "1.4.3"
+_JS_VERSION = "1.4.4"
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 
 def _guess_filename_content_type(filename: str | None, content_type: str | None) -> tuple[str, str]:
-    name = (filename or "face.jpg").split("?")[0] or "face.jpg"
-    ctype = (content_type or "").split(";")[0].strip().lower()
-    lower = name.lower()
-    if ctype in ("image/jpeg", "image/jpg", "image/png", "image/webp", "image/heic", "image/heif"):
-        return name, ctype
-    if lower.endswith(".png"):
-        return name, "image/png"
-    if lower.endswith(".webp"):
-        return name, "image/webp"
-    if lower.endswith(".heic") or lower.endswith(".heif"):
-        return name, "image/heic"
-    if not lower.endswith((".jpg", ".jpeg")):
-        name = f"{name}.jpg" if "." not in name else name
-    return name, "image/jpeg"
+    return normalize_face_meta(filename, content_type)
 
 
 class DomonapFaceUploadView(HomeAssistantView):
@@ -89,9 +82,19 @@ class DomonapFaceUploadView(HomeAssistantView):
             if len(body) > FACE_MAX_BYTES:
                 errors.append(f"{filename}: файл больше 8 МБ")
                 continue
+            try:
+                body, filename, ctype = await self.hass.async_add_executor_job(
+                    prepare_face_jpeg, body, filename, ctype
+                )
+            except FaceImageError as err:
+                errors.append(f"{filename}: {err}")
+                continue
+            if len(body) > FACE_MAX_BYTES:
+                errors.append(f"{filename}: файл больше 8 МБ")
+                continue
             res = await api.create_face(body, filename=filename, content_type=ctype)
             if is_api_error(res):
-                errors.append(f"{filename}: {res}")
+                errors.append(format_face_upload_error(filename, res))
             else:
                 created.append({"filename": filename, "response": res})
 
