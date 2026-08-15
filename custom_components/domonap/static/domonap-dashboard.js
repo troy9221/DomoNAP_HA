@@ -20,10 +20,14 @@
     );
   }
 
+  // Короткое имя двери без хвоста «Открыть дверь», #doorId и длинного
+  // addressString в скобках — иначе в entities обрезается «Малое Пон...».
   function cleanName(state) {
     let name = rawName(state).replace(/\s*Открыть дверь\s*$/i, "").trim();
-    name = name.replace(/\s*\([^)]{8,}\)\s*$/, "").trim();
-    name = name.replace(/\s*#[0-9a-fA-F]{4,}\s*$/, "").trim();
+    name = name.replace(/\s*#[0-9a-fA-F]{4,}\s*$/i, "").trim();
+    name = name.replace(/\s*\([^)]*(?:улица|ул\.|д\.|паркинг|кладов|машиномест|место\.)[^)]*\)\s*/gi, " ").trim();
+    name = name.replace(/\s*\([^)]{12,}\)\s*$/g, "").trim();
+    name = name.replace(/\s{2,}/g, " ").trim();
     return name || rawName(state);
   }
 
@@ -101,7 +105,7 @@
     return index === -1 ? "" : value.slice(index + 1).trim();
   }
 
-  // addressString в API — это квартира/кладовка/машиноместо целиком.
+  // addressString в API — квартира/кладовка/машиноместо целиком.
   // Для вкладок оставляем улицу и дом, как на ручной панели «Домофон».
   function buildingOf(address) {
     let value = String(address || "").trim();
@@ -148,6 +152,12 @@
     if (kind === "parking") return "mdi:parking";
     if (kind === "storage") return "mdi:warehouse";
     return homeIndex === 0 ? "mdi:home-city" : "mdi:home-city-outline";
+  }
+
+  function kindLabel(kind) {
+    if (kind === "parking") return "паркинг";
+    if (kind === "storage") return "кладовки";
+    return "дом";
   }
 
   function slugify(title, index) {
@@ -233,6 +243,8 @@
     if (/калит|ворот|gate/i.test(name)) return "mdi:gate";
     if (/въезд|выезд|шлагбаум|boom/i.test(name)) return "mdi:boom-gate";
     if (/лестн|stair/i.test(name)) return "mdi:stairs";
+    if (/тамбур/i.test(name)) return "mdi:door-closed-lock";
+    if (/подвал/i.test(name)) return "mdi:stairs-down";
     return "mdi:door";
   }
 
@@ -252,8 +264,9 @@
     }
     cards.push({
       type: "button",
-      name: "Открыть дверь",
+      name: "Открыть",
       icon: "mdi:door-open",
+      icon_height: "36px",
       tap_action: pressAction(button.entity_id),
     });
     return {
@@ -263,25 +276,25 @@
     };
   }
 
+  // Камера слева, компактная «Открыть» справа — как на ручной панели.
   function doorGrid(withCamera, names) {
-    const cards = withCamera.map(({ button, camera }) => ({
-      type: "vertical-stack",
-      cards: [
-        {
-          type: "picture-entity",
-          title: labelOf(button, names),
-          entity: camera.entity_id,
-          camera_view: "live",
-          show_state: false,
-        },
-        {
-          type: "button",
-          name: "Открыть · " + labelOf(button, names),
-          icon: "mdi:door-open",
-          tap_action: pressAction(button.entity_id),
-        },
-      ],
-    }));
+    const cards = [];
+    withCamera.forEach(({ button, camera }) => {
+      cards.push({
+        type: "picture-entity",
+        title: labelOf(button, names),
+        entity: camera.entity_id,
+        camera_view: "live",
+        show_state: false,
+      });
+      cards.push({
+        type: "button",
+        name: "Открыть",
+        icon: "mdi:door-open",
+        icon_height: "36px",
+        tap_action: pressAction(button.entity_id),
+      });
+    });
     if (!cards.length) return null;
     return { type: "grid", columns: 2, square: false, cards };
   }
@@ -322,7 +335,8 @@
         if (items.length >= 3) cards.push(entitiesCard(base, items, names, []));
         else leftover.push(...items);
       });
-    const leftoverTitle = kind === "parking" ? "Паркинг" : kind === "storage" ? "Кладовки" : "Калитки и входы";
+    const leftoverTitle =
+      kind === "parking" ? "Калитки и шлагбаумы" : kind === "storage" ? "Прочее" : "Калитки и входы";
     const leftoverCard = entitiesCard(leftoverTitle, leftover, names, pins);
     if (leftoverCard) cards.push(leftoverCard);
     return cards.filter(Boolean);
@@ -339,13 +353,27 @@
     }
     if (lastCallButton) {
       cards.push({
-        type: "button",
-        name: "Открыть дверь последнего звонка",
-        icon: "mdi:phone-incoming",
-        tap_action: pressAction(lastCallButton.entity_id),
+        type: "entities",
+        show_header_toggle: false,
+        entities: [
+          {
+            type: "button",
+            name: "Дверь последнего звонка",
+            icon: "mdi:phone-incoming",
+            action_name: "Открыть",
+            tap_action: pressAction(lastCallButton.entity_id),
+          },
+        ],
       });
     }
     return cards;
+  }
+
+  function siteHeader(building, kind) {
+    return {
+      type: "markdown",
+      content: "**" + building + "** · " + kindLabel(kind),
+    };
   }
 
   function cabinetView(title, path, icon, mode) {
@@ -418,7 +446,7 @@
             const pin = pinFor(button, data.pins);
             if (pin) pinEntities.push(pin);
           });
-          const cards = [...statusCards, ...allCallCards];
+          const cards = [siteHeader(group.building, group.kind), ...statusCards, ...allCallCards];
           const grid = doorGrid(withCamera, names);
           if (grid) cards.push(grid);
           cards.push(...otherLists(withoutCamera, pinEntities, names, group.kind));
