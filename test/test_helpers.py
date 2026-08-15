@@ -314,6 +314,7 @@ def test_domonap_dashboard_config_helper():
     const = _load_module("domonap_const", CONST_PATH)
     assert const.DASHBOARD_URL_PATH == "domonap-home"
     assert "-" in const.DASHBOARD_URL_PATH
+    assert const.DASHBOARD_TITLE == "Domonap"
     assert const.is_domonap_dashboard_config(
         {"strategy": {"type": "custom:domonap"}}
     )
@@ -332,6 +333,111 @@ def test_dashboard_js_registers_official_strategy_tag():
     assert "iframe" not in text
     assert "9164270777" not in text
     assert "domofonPublicPin" in text
+
+
+def test_dashboard_js_groups_by_street_and_kind():
+    text = (
+        ROOT / "custom_components" / "domonap" / "static" / "domonap-dashboard.js"
+    ).read_text(encoding="utf-8")
+    assert "function buildingOf(" in text
+    assert "function doorKind(" in text
+    assert "function groupBySite(" in text
+    assert "\u00b7 Паркинг" in text
+    assert "\u00b7 Кладовки" in text
+    assert "parts.slice(-2)" not in text
+    assert "allCallCards" in text
+    assert "Калитки и входы" in text
+
+
+def _dashboard_building_of(address: str) -> str:
+    import re
+
+    value = (address or "").strip()
+    if not value:
+        return "Другие двери"
+    value = re.sub(r"^паркинг\s*:\s*", "", value, flags=re.I)
+    value = re.sub(r"\bул\.\s*", "", value, flags=re.I)
+    parts = [part.strip() for part in value.split(",") if part.strip()]
+    street = ""
+    house = ""
+    for part in parts:
+        house_match = re.match(r"^(д\.?\s*\S+)", part, flags=re.I)
+        if house_match and not house:
+            house = house_match.group(1)
+            continue
+        if re.match(r"^(п\.|э\.?-?|кв\.|кладов|место|машиномест)", part, flags=re.I):
+            continue
+        if not street:
+            street = part
+    street = re.sub(r"^\s*(улица|ул\.?)\s+", "", street, flags=re.I)
+    street = re.sub(r"\s+улица\s*$", "", street, flags=re.I).strip()
+    return ", ".join(item for item in (street, house) if item) or value
+
+
+def _dashboard_door_kind(address: str, name: str) -> str:
+    import re
+
+    addr_low = (address or "").lower()
+    name_low = (name or "").lower()
+    if re.search(r"паркинг|машиномест|\bместо\.", addr_low):
+        return "parking"
+    if re.search(r"тамбур|подвал|кладов", name_low):
+        return "storage"
+    if re.search(r"калит|ворот|считыват|лифтов|лест|подъезд|вход", name_low):
+        return "home"
+    if re.search(r"кладов|келлер|э\.-1|э\s*-1", addr_low):
+        return "storage"
+    return "home"
+
+
+def test_dashboard_grouping_matches_manual_domofon_tabs():
+    cases = [
+        (
+            "улица Малое Понизовье, д.3, п.5, э.14, кв.264",
+            "Лифтовой холл 14 эт",
+            "home",
+            "Малое Понизовье, д.3",
+        ),
+        (
+            "улица Малое Понизовье, д.3, п.5, э.-1, кладовка.140",
+            "Вход 1, 1эт.",
+            "home",
+            "Малое Понизовье, д.3",
+        ),
+        (
+            "улица Малое Понизовье, д.3, п.5, э.-1, кладовка.140",
+            "Калитка 1",
+            "home",
+            "Малое Понизовье, д.3",
+        ),
+        (
+            "улица Малое Понизовье, д.3, п.5, э.-1, кладовка.140",
+            "Тамбур-шлюз",
+            "storage",
+            "Малое Понизовье, д.3",
+        ),
+        (
+            "Паркинг : ул. Малое Понизовье, д.1А, п.1, э.1, место.122",
+            "Выезд",
+            "parking",
+            "Малое Понизовье, д.1А",
+        ),
+        (
+            "Саларьевская улица, д.8к1, п.1, э.4, кв.26",
+            "1 Подъезд 1 Этаж Вход 1",
+            "home",
+            "Саларьевская, д.8к1",
+        ),
+        (
+            "Саларьевская улица, д.12с2, п.1, э.1, машиноместа.121",
+            "Въезд",
+            "parking",
+            "Саларьевская, д.12с2",
+        ),
+    ]
+    for address, name, kind, building in cases:
+        assert _dashboard_door_kind(address, name) == kind, name
+        assert _dashboard_building_of(address) == building, address
 
 
 def test_cabinet_html_has_no_hardcoded_phone():
@@ -515,14 +621,14 @@ def test_lovelace_resource_query_is_updated_on_version_bump():
         {"id": "r2", "url": "/domonap-static/domonap-dashboard.js?v=1.4.4"},
     ]
     wanted = [
-        "/domonap-static/domonap-card.js?v=1.4.6",
-        "/domonap-static/domonap-dashboard.js?v=1.4.6",
+        "/domonap-static/domonap-card.js?v=1.4.7",
+        "/domonap-static/domonap-dashboard.js?v=1.4.7",
     ]
     to_create, to_update = const.planned_lovelace_resource_changes(items, wanted)
     assert to_create == []
     assert to_update == [
-        ("r1", "/domonap-static/domonap-card.js?v=1.4.6"),
-        ("r2", "/domonap-static/domonap-dashboard.js?v=1.4.6"),
+        ("r1", "/domonap-static/domonap-card.js?v=1.4.7"),
+        ("r2", "/domonap-static/domonap-dashboard.js?v=1.4.7"),
     ]
     to_create, to_update = const.planned_lovelace_resource_changes([], wanted)
     assert to_create == wanted

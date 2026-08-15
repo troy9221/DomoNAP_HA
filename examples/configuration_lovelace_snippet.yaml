@@ -1,5 +1,5 @@
 # Ручное подключение YAML-дашборда больше не требуется.
-# Интеграция Domonap сама создаёт дашборд «Домофон» в боковом меню
+# Интеграция Domonap сама создаёт дашборд Domonap в боковом меню
 # (URL /domonap-home) после установки и авторизации.
 #
 # Этот фрагмент оставлен только для совместимости со старыми инструкциями.
@@ -9,7 +9,7 @@
 #   dashboards:
 #     domofon-dashboard:
 #       mode: yaml
-#       title: Домофон
+#       title: Domonap
 #       icon: mdi:doorbell-video
 #       show_in_sidebar: true
 #       filename: dashboards/domofon.yaml

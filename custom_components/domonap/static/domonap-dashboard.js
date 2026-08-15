@@ -12,12 +12,19 @@
     return String(attr(state, "addressString") || attr(state, "Address") || "").trim();
   }
 
-  function nameOf(state) {
+  function rawName(state) {
     return String(
       attr(state, "name") ||
         (state.attributes && state.attributes.friendly_name) ||
         state.entity_id
     );
+  }
+
+  function cleanName(state) {
+    let name = rawName(state).replace(/\s*Открыть дверь\s*$/i, "").trim();
+    name = name.replace(/\s*\([^)]{8,}\)\s*$/, "").trim();
+    name = name.replace(/\s*#[0-9a-fA-F]{4,}\s*$/, "").trim();
+    return name || rawName(state);
   }
 
   function isLastCallButton(state) {
@@ -84,28 +91,133 @@
     return pins.find((item) => doorIdOf(item) === doorId);
   }
 
-  function groupByAddress(buttons) {
+  function streetOf(building) {
+    return String(building || "").split(",")[0].trim();
+  }
+
+  function houseOf(building) {
+    const value = String(building || "");
+    const index = value.indexOf(",");
+    return index === -1 ? "" : value.slice(index + 1).trim();
+  }
+
+  // addressString в API — это квартира/кладовка/машиноместо целиком.
+  // Для вкладок оставляем улицу и дом, как на ручной панели «Домофон».
+  function buildingOf(address) {
+    let value = String(address || "").trim();
+    if (!value) return "Другие двери";
+    value = value.replace(/^паркинг\s*:\s*/i, "");
+    value = value.replace(/\bул\.\s*/gi, "");
+    const parts = value.split(",").map((part) => part.trim()).filter(Boolean);
+    let street = "";
+    let house = "";
+    parts.forEach((part) => {
+      const houseMatch = part.match(/^(д\.?\s*\S+)/i);
+      if (houseMatch && !house) {
+        house = houseMatch[1];
+        return;
+      }
+      if (/^(п\.|э\.?-?|кв\.|кладов|место|машиномест)/i.test(part)) return;
+      if (!street) street = part;
+    });
+    street = street.replace(/^\s*(улица|ул\.?)\s+/i, "").replace(/\s+улица\s*$/i, "").trim();
+    return [street, house].filter(Boolean).join(", ") || value;
+  }
+
+  function doorKind(address, name) {
+    const addrLow = String(address || "").toLowerCase();
+    const nameLow = String(name || "").toLowerCase();
+    if (/паркинг|машиномест|\bместо\./i.test(addrLow)) return "parking";
+    if (/тамбур|подвал|кладов/i.test(nameLow)) return "storage";
+    if (/калит|ворот|считыват|лифтов|лест|подъезд|вход/i.test(nameLow)) return "home";
+    if (/кладов|келлер|э\.-1|э\s*-1/i.test(addrLow)) return "storage";
+    return "home";
+  }
+
+  function viewTitle(building, kind, streetKindCounts) {
+    const street = streetOf(building);
+    const house = houseOf(building);
+    const clash = (streetKindCounts[street + "|" + kind] || 0) > 1;
+    const base = clash && house ? street + ", " + house : street;
+    if (kind === "parking") return base + " · Паркинг";
+    if (kind === "storage") return base + " · Кладовки";
+    return base || "Domonap";
+  }
+
+  function viewIcon(kind, homeIndex) {
+    if (kind === "parking") return "mdi:parking";
+    if (kind === "storage") return "mdi:warehouse";
+    return homeIndex === 0 ? "mdi:home-city" : "mdi:home-city-outline";
+  }
+
+  function slugify(title, index) {
+    const map = {
+      а: "a", б: "b", в: "v", г: "g", д: "d", е: "e", ё: "e", ж: "zh", з: "z",
+      и: "i", й: "y", к: "k", л: "l", м: "m", н: "n", о: "o", п: "p", р: "r",
+      с: "s", т: "t", у: "u", ф: "f", х: "h", ц: "ts", ч: "ch", ш: "sh", щ: "sch",
+      ъ: "", ы: "y", ь: "", э: "e", ю: "yu", я: "ya",
+    };
+    let slug = String(title || "").toLowerCase().split("").map((ch) => (
+      Object.prototype.hasOwnProperty.call(map, ch) ? map[ch] : ch
+    )).join("");
+    slug = slug.replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+    return (slug || "addr") + "-" + index;
+  }
+
+  function groupBySite(buttons) {
     const groups = new Map();
     buttons.forEach((button) => {
-      const address = addressOf(button) || "Другие двери";
-      if (!groups.has(address)) groups.set(address, []);
-      groups.get(address).push(button);
+      const address = addressOf(button);
+      const kind = doorKind(address, cleanName(button));
+      const building = buildingOf(address);
+      const key = building + "|" + kind;
+      if (!groups.has(key)) groups.set(key, { building, kind, buttons: [] });
+      groups.get(key).buttons.push(button);
     });
-    return [...groups.entries()].sort((a, b) => a[0].localeCompare(b[0], "ru"));
+    const streetKindCounts = {};
+    groups.forEach((group) => {
+      const key = streetOf(group.building) + "|" + group.kind;
+      streetKindCounts[key] = (streetKindCounts[key] || 0) + 1;
+    });
+    const kindOrder = { home: 0, parking: 1, storage: 2 };
+    return [...groups.values()]
+      .map((group) => ({
+        building: group.building,
+        kind: group.kind,
+        title: viewTitle(group.building, group.kind, streetKindCounts),
+        buttons: group.buttons,
+      }))
+      .sort((left, right) => {
+        const byKind = (kindOrder[left.kind] || 9) - (kindOrder[right.kind] || 9);
+        if (byKind) return byKind;
+        return left.title.localeCompare(right.title, "ru");
+      });
   }
 
-  function shortTitle(address, index) {
-    const parts = String(address || "").split(",").map((part) => part.trim()).filter(Boolean);
-    if (!parts.length) return "Адрес " + (index + 1);
-    if (parts.length <= 2) return parts.join(", ");
-    return parts.slice(-2).join(", ");
+  function displayNames(buttons) {
+    const items = buttons.map((button) => ({ button, base: cleanName(button) }));
+    const counts = {};
+    items.forEach((item) => {
+      counts[item.base] = (counts[item.base] || 0) + 1;
+    });
+    const seen = {};
+    const names = new Map();
+    items
+      .slice()
+      .sort((left, right) => doorIdOf(left.button).localeCompare(doorIdOf(right.button)))
+      .forEach((item) => {
+        if (counts[item.base] > 1) {
+          seen[item.base] = (seen[item.base] || 0) + 1;
+          names.set(item.button.entity_id, item.base + " " + seen[item.base]);
+        } else {
+          names.set(item.button.entity_id, item.base);
+        }
+      });
+    return names;
   }
 
-  function viewIcon(address) {
-    const value = String(address || "").toLowerCase();
-    if (/паркинг|parking|машиномест/.test(value)) return "mdi:parking";
-    if (/кладов|storage|келлер/.test(value)) return "mdi:warehouse";
-    return "mdi:doorbell-video";
+  function labelOf(button, names) {
+    return (names && names.get(button.entity_id)) || cleanName(button);
   }
 
   function pressAction(entityId) {
@@ -117,10 +229,17 @@
     };
   }
 
-  function callCard(button, camera, callSensor) {
+  function doorIcon(name) {
+    if (/калит|ворот|gate/i.test(name)) return "mdi:gate";
+    if (/въезд|выезд|шлагбаум|boom/i.test(name)) return "mdi:boom-gate";
+    if (/лестн|stair/i.test(name)) return "mdi:stairs";
+    return "mdi:door";
+  }
+
+  function callCard(button, camera, callSensor, names) {
     if (!callSensor) return null;
     const cards = [
-      { type: "markdown", content: "## Звонок — " + nameOf(button) },
+      { type: "markdown", content: "## Звонок — " + labelOf(button, names) },
     ];
     if (camera) {
       cards.push({
@@ -144,49 +263,69 @@
     };
   }
 
-  function doorGrid(withCamera) {
-    const cards = [];
-    withCamera.forEach(({ button, camera }) => {
-      cards.push({
-        type: "picture-entity",
-        title: nameOf(button),
-        entity: camera.entity_id,
-        camera_view: "live",
-        show_state: false,
-      });
-      cards.push({
-        type: "button",
-        name: "Открыть · " + nameOf(button),
-        icon: "mdi:door-open",
-        tap_action: pressAction(button.entity_id),
-      });
-    });
+  function doorGrid(withCamera, names) {
+    const cards = withCamera.map(({ button, camera }) => ({
+      type: "vertical-stack",
+      cards: [
+        {
+          type: "picture-entity",
+          title: labelOf(button, names),
+          entity: camera.entity_id,
+          camera_view: "live",
+          show_state: false,
+        },
+        {
+          type: "button",
+          name: "Открыть · " + labelOf(button, names),
+          icon: "mdi:door-open",
+          tap_action: pressAction(button.entity_id),
+        },
+      ],
+    }));
     if (!cards.length) return null;
     return { type: "grid", columns: 2, square: false, cards };
   }
 
-  function otherList(withoutCamera, pins) {
-    if (!withoutCamera.length && !pins.length) return null;
-    const entities = withoutCamera.map(({ button }) => ({
-      type: "button",
-      name: nameOf(button),
-      icon: /калит|ворот|gate/i.test(nameOf(button))
-        ? "mdi:gate"
-        : /въезд|выезд|шлагбаум|boom/i.test(nameOf(button))
-          ? "mdi:boom-gate"
-          : /лестн|stair/i.test(nameOf(button))
-            ? "mdi:stairs"
-            : "mdi:door",
-      action_name: "Открыть",
-      tap_action: pressAction(button.entity_id),
-    }));
-    pins.forEach((pin) => {
+  function entitiesCard(title, items, names, pins) {
+    const entities = items.map(({ button }) => {
+      const name = labelOf(button, names);
+      return {
+        type: "button",
+        name,
+        icon: doorIcon(name),
+        action_name: "Открыть",
+        tap_action: pressAction(button.entity_id),
+      };
+    });
+    (pins || []).forEach((pin) => {
       entities.push({
         entity: pin.entity_id,
-        name: "Код — " + nameOf(pin),
+        name: "Код — " + cleanName(pin),
       });
     });
-    return { type: "entities", title: "Двери без камеры", show_header_toggle: false, entities };
+    if (!entities.length) return null;
+    return { type: "entities", title, show_header_toggle: false, entities };
+  }
+
+  function otherLists(withoutCamera, pins, names, kind) {
+    const byBase = new Map();
+    withoutCamera.forEach((item) => {
+      const base = cleanName(item.button);
+      if (!byBase.has(base)) byBase.set(base, []);
+      byBase.get(base).push(item);
+    });
+    const cards = [];
+    const leftover = [];
+    [...byBase.entries()]
+      .sort((left, right) => left[0].localeCompare(right[0], "ru"))
+      .forEach(([base, items]) => {
+        if (items.length >= 3) cards.push(entitiesCard(base, items, names, []));
+        else leftover.push(...items);
+      });
+    const leftoverTitle = kind === "parking" ? "Паркинг" : kind === "storage" ? "Кладовки" : "Калитки и входы";
+    const leftoverCard = entitiesCard(leftoverTitle, leftover, names, pins);
+    if (leftoverCard) cards.push(leftoverCard);
+    return cards.filter(Boolean);
   }
 
   function lastCallCards(lastCall, lastCallButton) {
@@ -241,12 +380,19 @@
   class DomonapDashboardStrategy extends HTMLElement {
     static async generate(_config, hass) {
       const data = collect(hass);
-      const groups = groupByAddress(data.buttons);
+      const groups = groupBySite(data.buttons);
+      const allNames = displayNames(data.buttons);
       const views = [];
+      const allCallCards = [];
+      data.buttons.forEach((button) => {
+        const call = callCard(button, cameraFor(button, data.cameras), callFor(button, data.calls), allNames);
+        if (call) allCallCards.push(call);
+      });
+      const statusCards = lastCallCards(data.lastCall, data.lastCallButton);
 
       if (!groups.length) {
         views.push({
-          title: "Домофон",
+          title: "Domonap",
           path: "doors",
           icon: "mdi:doorbell-video",
           cards: [
@@ -258,41 +404,36 @@
           ],
         });
       } else {
-        groups.forEach(([address, buttons], index) => {
+        let homeIndex = 0;
+        groups.forEach((group, index) => {
+          const names = displayNames(group.buttons);
           const withCamera = [];
           const withoutCamera = [];
-          const callCards = [];
           const pinEntities = [];
-          buttons.forEach((button) => {
+          group.buttons.forEach((button) => {
             const camera = cameraFor(button, data.cameras);
             const item = { button, camera };
             if (camera) withCamera.push(item);
             else withoutCamera.push(item);
-            const callSensor = callFor(button, data.calls);
-            const call = callCard(button, camera, callSensor);
-            if (call) callCards.push(call);
             const pin = pinFor(button, data.pins);
             if (pin) pinEntities.push(pin);
           });
-          const cards = [];
-          if (index === 0) {
-            cards.push(...lastCallCards(data.lastCall, data.lastCallButton));
-          }
-          cards.push(...callCards);
-          const grid = doorGrid(withCamera);
+          const cards = [...statusCards, ...allCallCards];
+          const grid = doorGrid(withCamera, names);
           if (grid) cards.push(grid);
-          const list = otherList(withoutCamera, pinEntities);
-          if (list) cards.push(list);
-          if (!grid && !list) {
+          cards.push(...otherLists(withoutCamera, pinEntities, names, group.kind));
+          if (!grid && !withoutCamera.length && !pinEntities.length) {
             cards.push({
               type: "markdown",
               content: "На этом адресе нет дверей с кнопкой открытия.",
             });
           }
+          const icon = viewIcon(group.kind, group.kind === "home" ? homeIndex : 0);
+          if (group.kind === "home") homeIndex += 1;
           views.push({
-            title: shortTitle(address, index),
-            path: "addr-" + index,
-            icon: viewIcon(address),
+            title: group.title,
+            path: slugify(group.title, index),
+            icon,
             cards,
           });
         });
@@ -300,7 +441,7 @@
 
       views.push(cabinetView("Поддержка", "support", "mdi:headset", "support"));
       views.push(cabinetView("Аватары", "face", "mdi:face-recognition", "face"));
-      return { title: "Домофон", views };
+      return { title: "Domonap", views };
     }
 
     static shouldRegenerate(_config, oldHass, newHass) {
@@ -308,7 +449,7 @@
     }
 
     static getCreateSuggestions(_hass) {
-      return { title: "Домофон", icon: "mdi:doorbell-video" };
+      return { title: "Domonap", icon: "mdi:doorbell-video" };
     }
   }
 
@@ -320,7 +461,7 @@
     window.customStrategies.push({
       type: "domonap",
       strategyType: "dashboard",
-      name: "Домофон",
+      name: "Domonap",
       description: "Двери аккаунта DomoNAP, поддержка и проход по лицу",
       documentationURL: "https://github.com/troy9221/DomoNAP_HA",
     });
