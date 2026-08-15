@@ -42,23 +42,56 @@ class DomonapAccountCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return list(data.get("tickets") or [])
 
     async def _async_update_data(self) -> dict[str, Any]:
-        faces_payload = await self.api.get_faces()
-        if is_api_error(faces_payload):
-            _LOGGER.debug("GetFaces failed: %s", faces_payload)
-
-        faces = normalize_face_items(faces_payload)
-        tickets = await self.api.get_all_tickets()
-        last_ticket_id = (
-            str(tickets[0].get("ticketId") or tickets[0].get("id") or "")
-            if tickets
-            else None
+        previous = self.data or {}
+        faces = list(previous.get("faces") or [])
+        tickets = list(previous.get("tickets") or [])
+        last_ticket_id = previous.get("last_ticket_id")
+        last_ticket_messages: list[dict[str, Any]] = list(
+            previous.get("last_ticket_messages") or []
         )
-        last_ticket_messages: list[dict[str, Any]] = []
-        if last_ticket_id:
-            last_ticket_messages = await self.api.fetch_ticket_conversation(
-                last_ticket_id
+        faces_payload = previous.get("faces_payload") or {}
+
+        try:
+            faces_payload_new = await self.api.get_faces()
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.debug("GetFaces raised: %s", err)
+            faces_payload_new = None
+        if faces_payload_new is None:
+            pass
+        elif is_api_error(faces_payload_new):
+            _LOGGER.debug("GetFaces failed: %s", faces_payload_new)
+        else:
+            faces = normalize_face_items(faces_payload_new)
+            faces_payload = (
+                faces_payload_new if isinstance(faces_payload_new, dict) else {}
             )
-            tickets[0]["messages"] = last_ticket_messages
+
+        try:
+            tickets_new = await self.api.get_all_tickets()
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.debug("GetPagedTickets raised: %s", err)
+            tickets_new = None
+        if tickets_new is None:
+            pass
+        else:
+            tickets = tickets_new
+            last_ticket_id = (
+                str(tickets[0].get("ticketId") or tickets[0].get("id") or "")
+                if tickets
+                else None
+            )
+            last_ticket_messages = []
+            if last_ticket_id:
+                try:
+                    last_ticket_messages = await self.api.fetch_ticket_conversation(
+                        last_ticket_id
+                    )
+                    tickets[0]["messages"] = last_ticket_messages
+                except Exception as err:  # noqa: BLE001
+                    _LOGGER.debug("Ticket conversation raised: %s", err)
+                    last_ticket_messages = list(
+                        previous.get("last_ticket_messages") or []
+                    )
         _LOGGER.debug(
             "Account snapshot: %d faces, %d tickets, %d messages",
             len(faces),

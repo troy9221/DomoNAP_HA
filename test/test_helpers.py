@@ -329,6 +329,7 @@ def test_dashboard_js_registers_official_strategy_tag():
     assert "window.customStrategies" in text
     assert "iframe" not in text
     assert "9164270777" not in text
+    assert "domofonPublicPin" in text
 
 
 def test_cabinet_html_has_no_hardcoded_phone():
@@ -381,3 +382,87 @@ def test_fetch_keys_by_type_handles_non_dict_payload():
 
     client.get_paged_keys = fake_get_paged_keys
     assert asyncio.run(client._fetch_keys_by_type(0)) == []
+
+
+def test_fetch_keys_by_type_reads_items_wrapper():
+    client = IntercomAPI()
+
+    async def fake_get_paged_keys(**kwargs):
+        return {
+            "error": None,
+            "items": [{"id": "k2", "name": "Gate", "doorId": "d2"}],
+            "pageCount": 1,
+        }
+
+    client.get_paged_keys = fake_get_paged_keys
+    keys = asyncio.run(client._fetch_keys_by_type(0))
+    assert keys[0]["id"] == "k2"
+
+
+def test_fetch_all_keys_skips_non_dict_items():
+    client = IntercomAPI()
+
+    async def fake_fetch(keys_type, per_page=100):
+        return ["bad", {"id": "k1", "doorId": "d1", "name": "Дверь"}]
+
+    client._fetch_keys_by_type = fake_fetch
+    data = asyncio.run(client._fetch_all_keys("doors"))
+    assert len(data["results"]) == 1
+    assert data["results"][0]["id"] == "k1"
+
+
+def test_get_all_tickets_returns_none_on_first_page_error():
+    client = IntercomAPI()
+
+    async def fail(**kwargs):
+        return {"error": "HTTP 500", "status": 500, "ok": False}
+
+    client.get_paged_tickets = fail
+    assert asyncio.run(client.get_all_tickets()) is None
+
+
+def test_get_all_tickets_empty_list_is_not_error():
+    client = IntercomAPI()
+
+    async def empty(**kwargs):
+        return {"error": None, "results": []}
+
+    client.get_paged_tickets = empty
+    assert asyncio.run(client.get_all_tickets()) == []
+
+
+def test_redact_payload_hides_tokens():
+    redacted = api._redact_payload(
+        {"refreshToken": "secret", "keysType": 0, "confirmCode": "1234"}
+    )
+    assert redacted["refreshToken"] == "***"
+    assert redacted["confirmCode"] == "***"
+    assert redacted["keysType"] == 0
+    assert api._redact_payload("not-a-dict") == "not-a-dict"
+
+
+def test_extract_api_list_video_area_wrappers():
+    assert api.extract_api_list(
+        {"error": None, "results": [{"category": "Parking"}]}
+    ) == [{"category": "Parking"}]
+    assert api.extract_api_list(
+        {"items": [{"category": "House", "id": "a1"}]}
+    ) == [{"category": "House", "id": "a1"}]
+
+
+def test_dashboard_js_matches_call_sensors_without_english_entity_id():
+    text = (
+        ROOT / "custom_components" / "domonap" / "static" / "domonap-dashboard.js"
+    ).read_text()
+    assert 'id.indexOf("incoming_call")' not in text
+    assert 'id.indexOf("door_code")' not in text
+    assert "domofonPublicPin" in text
+    assert 'id.startsWith("binary_sensor.") && doorIdOf(state)' in text
+
+
+def test_cabinet_card_guards_double_custom_element_define():
+    text = (
+        ROOT / "custom_components" / "domonap" / "static" / "domonap-card.js"
+    ).read_text()
+    assert 'customElements.get("domonap-cabinet-card")' in text
+    assert "domonap-cabinet-card" in text

@@ -164,7 +164,8 @@ class DomonapCabinetCard extends HTMLElement {
     try {
       const resp = await this._hass.callService("domonap", "get_support_ticket_messages", { ticket_id: id }, {}, true, true);
       const payload = (resp && resp.response) || resp || {};
-      const items = payload.results || payload.items || payload.messages || payload.ticketMessages || (payload.response && (payload.response.results || payload.response.items)) || [];
+      const nested = payload.response || {};
+      const items = payload.results || payload.items || payload.messages || payload.ticketMessages || nested.results || nested.items || nested.messages || [];
       const msgs = Array.isArray(items) ? items : [];
       if (!msgs.length) {
         thread.innerHTML = `<p class="hint">В этом обращении пока нет сообщений.</p>`;
@@ -238,10 +239,14 @@ class DomonapCabinetCard extends HTMLElement {
   }
 }
 
-customElements.define("domonap-cabinet-card", DomonapCabinetCard);
+if (!customElements.get("domonap-cabinet-card")) {
+  customElements.define("domonap-cabinet-card", DomonapCabinetCard);
+}
 window.customCards = window.customCards || [];
-window.customCards.push({
-  type: "domonap-cabinet-card",
-  name: "DomoNAP кабинет",
-  description: "Обращения поддержки и проход по лицу",
-});
+if (!window.customCards.some((item) => item && item.type === "domonap-cabinet-card")) {
+  window.customCards.push({
+    type: "domonap-cabinet-card",
+    name: "DomoNAP кабинет",
+    description: "Обращения поддержки и проход по лицу",
+  });
+}

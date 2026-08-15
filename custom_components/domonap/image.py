@@ -157,7 +157,9 @@ class IntercomCallImageEntity(ImageEntity):
 
     @callback
     def _handle_incoming_call(self, event) -> None:
-        if event.data.get("DoorId") != self._door_id:
+        if event.data.get("DoorId") is None:
+            return
+        if str(event.data.get("DoorId")) != str(self._door_id):
             return
 
         original_photo_url: Optional[str] = event.data.get("OriginalPhotoUrl")
