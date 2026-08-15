@@ -143,8 +143,8 @@
     const house = houseOf(building);
     const clash = (streetKindCounts[street + "|" + kind] || 0) > 1;
     const base = clash && house ? street + ", " + house : street;
-    if (kind === "parking") return base + " · Паркинг";
-    if (kind === "storage") return base + " · Кладовки";
+    if (kind === "parking") return "Паркинг · " + base;
+    if (kind === "storage") return "Кладовки · " + base;
     return base || "Domonap";
   }
 
@@ -160,6 +160,13 @@
     return "дом";
   }
 
+  function kindRank(kind) {
+    if (kind === "home") return 0;
+    if (kind === "parking") return 1;
+    if (kind === "storage") return 2;
+    return 9;
+  }
+
   function slugify(title, index) {
     const map = {
       а: "a", б: "b", в: "v", г: "g", д: "d", е: "e", ё: "e", ж: "zh", з: "z",
@@ -172,6 +179,40 @@
     )).join("");
     slug = slug.replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
     return (slug || "addr") + "-" + index;
+  }
+
+  // Номер из entity_id (..._open_door, ..._open_door_2) — стабильный порядок 1..N.
+  function entitySeq(state) {
+    const id = String(state && state.entity_id || "");
+    const match = id.match(/_(\d+)$/);
+    return match ? parseInt(match[1], 10) : 1;
+  }
+
+  function compareButtons(left, right) {
+    const baseLeft = String(left.entity_id || "").replace(/_\d+$/, "");
+    const baseRight = String(right.entity_id || "").replace(/_\d+$/, "");
+    if (baseLeft !== baseRight) return baseLeft.localeCompare(baseRight, "en");
+    const bySeq = entitySeq(left) - entitySeq(right);
+    if (bySeq) return bySeq;
+    return doorIdOf(left).localeCompare(doorIdOf(right));
+  }
+
+  function labelNumber(label) {
+    const match = String(label || "").match(/(\d+)\s*$/);
+    return match ? parseInt(match[1], 10) : 0;
+  }
+
+  function sortDoorItems(items, names) {
+    return items.slice().sort((left, right) => {
+      const nameLeft = labelOf(left.button, names);
+      const nameRight = labelOf(right.button, names);
+      const numLeft = labelNumber(nameLeft);
+      const numRight = labelNumber(nameRight);
+      if (numLeft !== numRight) return numLeft - numRight;
+      const byButton = compareButtons(left.button, right.button);
+      if (byButton) return byButton;
+      return nameLeft.localeCompare(nameRight, "ru", { numeric: true });
+    });
   }
 
   function groupBySite(buttons) {
@@ -189,18 +230,21 @@
       const key = streetOf(group.building) + "|" + group.kind;
       streetKindCounts[key] = (streetKindCounts[key] || 0) + 1;
     });
-    const kindOrder = { home: 0, parking: 1, storage: 2 };
     return [...groups.values()]
       .map((group) => ({
         building: group.building,
         kind: group.kind,
         title: viewTitle(group.building, group.kind, streetKindCounts),
-        buttons: group.buttons,
+        // Стабильный порядок дверей внутри вкладки.
+        buttons: group.buttons.slice().sort(compareButtons),
       }))
       .sort((left, right) => {
-        const byKind = (kindOrder[left.kind] || 9) - (kindOrder[right.kind] || 9);
+        // Сначала все дома, потом паркинги, потом кладовки.
+        const byKind = kindRank(left.kind) - kindRank(right.kind);
         if (byKind) return byKind;
-        return left.title.localeCompare(right.title, "ru");
+        const byStreet = streetOf(left.building).localeCompare(streetOf(right.building), "ru");
+        if (byStreet) return byStreet;
+        return left.building.localeCompare(right.building, "ru");
       });
   }
 
@@ -214,7 +258,7 @@
     const names = new Map();
     items
       .slice()
-      .sort((left, right) => doorIdOf(left.button).localeCompare(doorIdOf(right.button)))
+      .sort((left, right) => compareButtons(left.button, right.button))
       .forEach((item) => {
         if (counts[item.base] > 1) {
           seen[item.base] = (seen[item.base] || 0) + 1;
@@ -279,7 +323,7 @@
   // Камера слева, компактная «Открыть» справа — как на ручной панели.
   function doorGrid(withCamera, names) {
     const cards = [];
-    withCamera.forEach(({ button, camera }) => {
+    sortDoorItems(withCamera, names).forEach(({ button, camera }) => {
       cards.push({
         type: "picture-entity",
         title: labelOf(button, names),
@@ -300,7 +344,7 @@
   }
 
   function entitiesCard(title, items, names, pins) {
-    const entities = items.map(({ button }) => {
+    const entities = sortDoorItems(items, names).map(({ button }) => {
       const name = labelOf(button, names);
       return {
         type: "button",
@@ -322,7 +366,7 @@
 
   function otherLists(withoutCamera, pins, names, kind) {
     const byBase = new Map();
-    withoutCamera.forEach((item) => {
+    sortDoorItems(withoutCamera, names).forEach((item) => {
       const base = cleanName(item.button);
       if (!byBase.has(base)) byBase.set(base, []);
       byBase.get(base).push(item);
@@ -460,7 +504,8 @@
           if (group.kind === "home") homeIndex += 1;
           views.push({
             title: group.title,
-            path: slugify(group.title, index),
+            // Префикс path держит порядок дом → паркинг → кладовки.
+            path: kindRank(group.kind) + "-" + slugify(group.title, index),
             icon,
             cards,
           });
