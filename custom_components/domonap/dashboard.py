@@ -1,4 +1,4 @@
-"""Автодашборд «Домофон»: двери авторизованного аккаунта + поддержка + лица."""
+"""Автодашборд Domonap: двери авторизованного аккаунта + поддержка + лица."""
 
 from __future__ import annotations
 
@@ -79,6 +79,8 @@ async def _ensure_storage_dashboard(hass: HomeAssistant) -> None:
             existing = _attach_storage_dashboard(hass, lovelace_data, item)
         if existing is None:
             return
+    else:
+        await _ensure_dashboard_title(hass)
 
     await _ensure_strategy(existing)
 
@@ -110,6 +112,38 @@ async def _create_dashboard_item(hass: HomeAssistant) -> dict[str, Any] | None:
             _LOGGER.info("Created Lovelace dashboard /%s", DASHBOARD_URL_PATH)
             return item
     return None
+
+
+async def _ensure_dashboard_title(hass: HomeAssistant) -> None:
+    """Переименовать сайдбар с устаревшего «Домофон» на Domonap."""
+    try:
+        from homeassistant.components.lovelace.dashboard import DashboardsCollection
+    except Exception:
+        return
+
+    collection = DashboardsCollection(hass)
+    await collection.async_load()
+    for item in collection.async_items():
+        if item.get("url_path") != DASHBOARD_URL_PATH:
+            continue
+        if item.get("title") == DASHBOARD_TITLE:
+            return
+        item_id = item.get("id")
+        if item_id is None:
+            return
+        update = getattr(collection, "async_update_item", None)
+        if not callable(update):
+            return
+        try:
+            await update(item_id, {"title": DASHBOARD_TITLE})
+            _LOGGER.info(
+                "Renamed Lovelace dashboard /%s title to %s",
+                DASHBOARD_URL_PATH,
+                DASHBOARD_TITLE,
+            )
+        except Exception:
+            _LOGGER.debug("Could not rename Domonap dashboard title", exc_info=True)
+        return
 
 
 def _attach_storage_dashboard(hass: HomeAssistant, lovelace_data, item: dict[str, Any]):
