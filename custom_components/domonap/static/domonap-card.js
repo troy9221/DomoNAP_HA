@@ -23,6 +23,86 @@ input[type=file] { display:none; }
 .error { color: var(--error-color, #c00); }
 `;
 
+function faceUploadError(data) {
+  if (!data) return "Ошибка загрузки";
+  if (data.error) return String(data.error);
+  const errors = data.errors;
+  if (Array.isArray(errors) && errors.length) return errors.join("; ");
+  if (errors) return String(errors);
+  try { return JSON.stringify(data); } catch (e) { return "Ошибка загрузки"; }
+}
+
+function loadImageElement(src) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error("decode"));
+    img.src = src;
+  });
+}
+
+async function jpegFromGalleryFile(file, index) {
+  const maxEdge = 1280;
+  const quality = 0.85;
+  const outName = "face-" + (index + 1) + ".jpg";
+  let width = 0;
+  let height = 0;
+  let draw = null;
+  let release = () => {};
+  try {
+    if (typeof createImageBitmap === "function") {
+      let bitmap;
+      try {
+        bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
+      } catch (e) {
+        bitmap = await createImageBitmap(file);
+      }
+      width = bitmap.width;
+      height = bitmap.height;
+      draw = (ctx, w, h) => ctx.drawImage(bitmap, 0, 0, w, h);
+      release = () => { if (bitmap && bitmap.close) bitmap.close(); };
+    }
+  } catch (e) {}
+  if (!draw) {
+    const url = URL.createObjectURL(file);
+    try {
+      const img = await loadImageElement(url);
+      width = img.naturalWidth || img.width;
+      height = img.naturalHeight || img.height;
+      draw = (ctx, w, h) => ctx.drawImage(img, 0, 0, w, h);
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  }
+  if (!draw || !width || !height) {
+    return new File([file], outName, { type: "image/jpeg" });
+  }
+  const scale = Math.min(1, maxEdge / Math.max(width, height));
+  const w = Math.max(1, Math.round(width * scale));
+  const h = Math.max(1, Math.round(height * scale));
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0, 0, w, h);
+  draw(ctx, w, h);
+  release();
+  const blob = await new Promise((resolve) => {
+    if (!canvas.toBlob) {
+      resolve(null);
+      return;
+    }
+    canvas.toBlob((item) => resolve(item), "image/jpeg", quality);
+  });
+  if (blob) return new File([blob], outName, { type: "image/jpeg" });
+  const dataUrl = canvas.toDataURL("image/jpeg", quality);
+  const bin = atob(dataUrl.split(",")[1]);
+  const arr = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+  return new File([arr], outName, { type: "image/jpeg" });
+}
+
 class DomonapCabinetCard extends HTMLElement {
   constructor() {
     super();
@@ -80,7 +160,7 @@ class DomonapCabinetCard extends HTMLElement {
   }
   _faceHtml() {
     return `<h2>Проход по лицу</h2>
-      <p class="hint">Сфотографируйте себя или выберите несколько снимков из галереи. Так же, как аватар в приложении DomoNAP.</p>
+      <p class="hint">Сфотографируйте себя или выберите снимки из галереи. С iPhone лучше JPEG, не HEIC: фото перекодируется автоматически.</p>
       <div class="faces"></div>
       <div class="row">
         <button class="cam">Сфотографировать</button>
@@ -208,15 +288,25 @@ class DomonapCabinetCard extends HTMLElement {
     if (!files.length) return;
     this._setStatus(`Загружаю ${files.length} фото…`);
     const fd = new FormData();
-    files.forEach((f, i) => fd.append("file", f, f.name || `face-${i + 1}.jpg`));
     try {
+      for (let i = 0; i < files.length; i++) {
+        let jpeg;
+        try {
+          jpeg = await jpegFromGalleryFile(files[i], i);
+        } catch (e) {
+          jpeg = new File([files[i]], `face-${i + 1}.jpg`, { type: "image/jpeg" });
+        }
+        fd.append("file", jpeg, jpeg.name || `face-${i + 1}.jpg`);
+      }
       const resp = await fetch("/api/domonap/face", {
         method: "POST",
         headers: { Authorization: `Bearer ${this._hass.auth.data.access_token}` },
         body: fd,
       });
       const data = await resp.json();
-      if (!resp.ok || data.ok === false) throw new Error(data.error || data.errors || JSON.stringify(data));
+      if (!resp.ok || data.ok === false) {
+        throw new Error(faceUploadError(data));
+      }
       this._setStatus(`Добавлено фото: ${data.created}`);
       setTimeout(() => this._refreshLists(), 2000);
     } catch (err) {

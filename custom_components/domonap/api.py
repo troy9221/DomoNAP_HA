@@ -1,3 +1,4 @@
+import io
 import logging
 import aiohttp
 import asyncio
@@ -36,6 +37,29 @@ KEY_TYPES_DOORS = (0, 1, 2, 4, 5, 6)
 KEY_TYPES_PASSES = (3,)
 
 FACE_CREATE_PART_NAME = "faceFile"
+# В APK встречаются разные имена multipart-части; пробуем по очереди.
+FACE_CREATE_PART_NAMES = ("faceFile", "AvatarFile", "FaceFile", "file")
+
+
+def _normalize_face_upload_meta(filename: str, content_type: str) -> tuple[str, str]:
+    """iPhone шлёт IMG_2940.jpeg / image/jpg — CreateFace ждёт .jpg и image/jpeg."""
+    name = (filename or "face.jpg").split("?")[0].rsplit("/", 1)[-1] or "face.jpg"
+    ctype = (content_type or "image/jpeg").split(";")[0].strip().lower()
+    lower = name.lower()
+    if ctype in ("image/jpg", "image/jpeg") or lower.endswith((".jpg", ".jpeg", ".jpe")):
+        stem = name.rsplit(".", 1)[0] if "." in name else name
+        return f"{stem or 'face'}.jpg", "image/jpeg"
+    if ctype == "image/png" or lower.endswith(".png"):
+        return name, "image/png"
+    return name, ctype or "image/jpeg"
+
+
+def _face_name_from_filename(filename: str) -> str:
+    name = (filename or "Avatar").rsplit("/", 1)[-1]
+    if "." in name:
+        name = name.rsplit(".", 1)[0]
+    name = (name or "").strip() or "Avatar"
+    return name[:64]
 
 
 def extract_api_list(payload: Any, *keys: str) -> list:
@@ -1190,33 +1214,52 @@ class IntercomAPI:
         image_bytes: bytes,
         filename: str = "face.jpg",
         content_type: str = "image/jpeg",
-        part_name: str = FACE_CREATE_PART_NAME,
+        part_name: Optional[str] = None,
+        face_name: Optional[str] = None,
+    ):
+        filename, content_type = _normalize_face_upload_meta(filename, content_type)
+        display_name = face_name or _face_name_from_filename(filename)
+        part_names = (part_name,) if part_name else FACE_CREATE_PART_NAMES
+        last_result: Any = None
+        for name in part_names:
+            last_result = await self._post_face_multipart(
+                image_bytes,
+                filename=filename,
+                content_type=content_type,
+                part_name=name,
+                face_name=display_name,
+            )
+            if not is_api_error(last_result):
+                return last_result
+        return last_result
+
+    async def _post_face_multipart(
+        self,
+        image_bytes: bytes,
+        *,
+        filename: str,
+        content_type: str,
+        part_name: str,
+        face_name: str,
     ):
         def _build_form():
             form = aiohttp.FormData()
             form.add_field(
                 part_name,
-                image_bytes,
+                io.BytesIO(image_bytes),
                 filename=filename,
                 content_type=content_type,
             )
+            if face_name:
+                form.add_field("faceName", face_name)
             return form
 
-        result = await self._post_multipart(
+        return await self._post_multipart(
             "/client-api/Face/CreateFace",
             _build_form,
             need_auth=True,
             expect="json",
         )
-        if is_api_error(result) and part_name == FACE_CREATE_PART_NAME:
-            # В APK встречаются и faceFile, и AvatarFile как имя multipart-части.
-            return await self.create_face(
-                image_bytes,
-                filename=filename,
-                content_type=content_type,
-                part_name="AvatarFile",
-            )
-        return result
 
     async def delete_face(self, image_id: str):
         return await self._post(

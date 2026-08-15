@@ -16,6 +16,7 @@ files:
   - custom_components/domonap/image.py
   - custom_components/domonap/coordinator.py
   - custom_components/domonap/actions.py
+  - custom_components/domonap/face_image.py
   - custom_components/domonap/frontend.py
   - custom_components/domonap/dashboard.py
   - custom_components/domonap/update.py
