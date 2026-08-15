@@ -473,6 +473,35 @@ def test_cabinet_card_guards_double_custom_element_define():
     assert 'type: "image/jpeg"' in text
 
 
+def test_cabinet_card_face_thumbnail_preview_and_delete_layout():
+    text = (
+        ROOT / "custom_components" / "domonap" / "static" / "domonap-card.js"
+    ).read_text()
+    assert "lightbox" in text
+    assert "ID ·" in text
+    assert ".face .cap" in text
+    assert "flex-direction:column" in text
+    assert "openFacePreview" in text or "_openFacePreview" in text
+    assert "Закрыть" in text
+    assert 'class="thumb"' in text
+    assert 'class="uid"' in text
+    assert ".face .del { width:100%; }" in text
+
+
+def test_cabinet_html_face_thumbnail_preview_and_delete_layout():
+    text = (
+        ROOT / "custom_components" / "domonap" / "static" / "domonap-cabinet.html"
+    ).read_text()
+    assert "lightbox" in text
+    assert "ID ·" in text
+    assert "flex-direction: column" in text
+    assert "openFacePreview" in text
+    assert "Закрыть" in text
+    assert 'class="thumb"' in text
+    assert 'class="uid"' in text
+    assert ".face .del { width: 100%; }" in text
+
+
 FACE_IMAGE_PATH = ROOT / "custom_components" / "domonap" / "face_image.py"
 face_image = _load_module("domonap_face_image", FACE_IMAGE_PATH)
 

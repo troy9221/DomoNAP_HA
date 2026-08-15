@@ -21,7 +21,7 @@ from .dashboard import async_setup_dashboard
 _LOGGER = logging.getLogger(__name__)
 
 _JS_FILES = ("domonap-card.js", "domonap-dashboard.js")
-_JS_VERSION = "1.4.4"
+_JS_VERSION = "1.4.5"
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 
