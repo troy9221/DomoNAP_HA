@@ -15,13 +15,13 @@ from .face_image import (
     normalize_face_meta,
     prepare_face_jpeg,
 )
-from .const import FACE_MAX_BYTES
+from .const import FACE_MAX_BYTES, planned_lovelace_resource_changes
 from .dashboard import async_setup_dashboard
 
 _LOGGER = logging.getLogger(__name__)
 
 _JS_FILES = ("domonap-card.js", "domonap-dashboard.js")
-_JS_VERSION = "1.4.5"
+_JS_VERSION = "1.4.6"
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 
@@ -152,17 +152,19 @@ async def _register_lovelace_resource(hass: HomeAssistant) -> None:
             await load()
         items_fn = getattr(resources, "async_items", None)
         items = list(items_fn()) if callable(items_fn) else []
-        existing = {
-            str(item.get("url") or "").split("?")[0]
-            for item in items
-        }
+        to_create, to_update = planned_lovelace_resource_changes(items, urls)
         create = getattr(resources, "async_create_item", None)
+        update = getattr(resources, "async_update_item", None)
+        if callable(update):
+            for item_id, url in to_update:
+                try:
+                    await update(item_id, {"res_type": "module", "url": url})
+                except Exception:
+                    await update(item_id, {"type": "module", "url": url})
+                _LOGGER.info("Updated Lovelace resource %s", url)
         if not callable(create):
             return
-        for url in urls:
-            path = url.split("?")[0]
-            if path in existing:
-                continue
+        for url in to_create:
             await create({"res_type": "module", "url": url})
             _LOGGER.info("Registered Lovelace resource %s", url)
     except Exception:

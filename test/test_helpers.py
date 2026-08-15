@@ -485,7 +485,10 @@ def test_cabinet_card_face_thumbnail_preview_and_delete_layout():
     assert "Закрыть" in text
     assert 'class="thumb"' in text
     assert 'class="uid"' in text
-    assert ".face .del { width:100%; }" in text
+    assert ".face .del { width:100%;" in text
+    assert "width:156px" in text
+    assert "Нажмите миниатюру" in text
+    assert "id.slice(0, 8)" in text
 
 
 def test_cabinet_html_face_thumbnail_preview_and_delete_layout():
@@ -499,7 +502,37 @@ def test_cabinet_html_face_thumbnail_preview_and_delete_layout():
     assert "Закрыть" in text
     assert 'class="thumb"' in text
     assert 'class="uid"' in text
-    assert ".face .del { width: 100%; }" in text
+    assert ".face .del { width: 100%;" in text
+    assert "width: 156px" in text
+    assert "Нажмите миниатюру" in text
+
+
+def test_lovelace_resource_query_is_updated_on_version_bump():
+    _install_homeassistant_stub()
+    const = _load_module("domonap_const", CONST_PATH)
+    items = [
+        {"id": "r1", "url": "/domonap-static/domonap-card.js?v=1.4.4"},
+        {"id": "r2", "url": "/domonap-static/domonap-dashboard.js?v=1.4.4"},
+    ]
+    wanted = [
+        "/domonap-static/domonap-card.js?v=1.4.6",
+        "/domonap-static/domonap-dashboard.js?v=1.4.6",
+    ]
+    to_create, to_update = const.planned_lovelace_resource_changes(items, wanted)
+    assert to_create == []
+    assert to_update == [
+        ("r1", "/domonap-static/domonap-card.js?v=1.4.6"),
+        ("r2", "/domonap-static/domonap-dashboard.js?v=1.4.6"),
+    ]
+    to_create, to_update = const.planned_lovelace_resource_changes([], wanted)
+    assert to_create == wanted
+    assert to_update == []
+    to_create, to_update = const.planned_lovelace_resource_changes(items, [
+        "/domonap-static/domonap-card.js?v=1.4.4",
+        "/domonap-static/domonap-dashboard.js?v=1.4.4",
+    ])
+    assert to_create == []
+    assert to_update == []
 
 
 FACE_IMAGE_PATH = ROOT / "custom_components" / "domonap" / "face_image.py"
