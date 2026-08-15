@@ -8,6 +8,7 @@ button, .filebtn { appearance:none; border:0; border-radius:12px; padding:12px 1
   background: var(--primary-color); color: var(--text-primary-color, #fff); cursor:pointer; flex:1; min-width:140px; }
 button.sec { background: var(--secondary-background-color); color: var(--primary-text-color); border:1px solid var(--divider-color); }
 button:disabled { opacity:.5; }
+.face button, .lightbox .close { flex:none; min-width:0; }
 textarea { width:100%; min-height:96px; box-sizing:border-box; border-radius:12px; padding:10px;
   border:1px solid var(--divider-color); background: var(--card-background-color); color: inherit; font-size:1rem; }
 .ticket { border:1px solid var(--divider-color); border-radius:12px; padding:10px 12px; margin:8px 0; cursor:pointer; }
@@ -16,9 +17,22 @@ textarea { width:100%; min-height:96px; box-sizing:border-box; border-radius:12p
 .msg b { display:block; font-size:.85rem; opacity:.8; }
 .status { margin-top:8px; font-size:.9rem; }
 .faces { display:grid; grid-template-columns: repeat(auto-fill, minmax(140px,1fr)); gap:10px; }
-.face { border:1px solid var(--divider-color); border-radius:12px; overflow:hidden; }
-.face img { width:100%; height:140px; object-fit:cover; background:#111; display:block; }
-.face .cap { padding:8px; font-size:.85rem; display:flex; justify-content:space-between; gap:6px; align-items:center; }
+.face { border:1px solid var(--divider-color); border-radius:12px; overflow:hidden; display:flex; flex-direction:column; }
+.face .thumb { display:block; width:100%; height:140px; padding:0; margin:0; border:0; border-radius:0;
+  background:#111; cursor:zoom-in; overflow:hidden; }
+.face .thumb:disabled { cursor:default; opacity:1; }
+.face .thumb img, .face .ph { width:100%; height:140px; object-fit:cover; background:#111; display:block; pointer-events:none; }
+.face .cap { padding:8px; display:flex; flex-direction:column; gap:8px; align-items:stretch; }
+.face .uid { font-size:.75rem; opacity:.75; line-height:1.3; text-align:center;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.face .del { width:100%; }
+dialog.lightbox { border:0; margin:0; padding:48px 16px 16px; width:100vw; height:100vh;
+  max-width:none; max-height:none; background:rgba(0,0,0,.88); box-sizing:border-box; }
+dialog.lightbox[open] { display:flex; align-items:center; justify-content:center; }
+dialog.lightbox::backdrop { background:rgba(0,0,0,.72); }
+dialog.lightbox img { max-width:min(96vw, 920px); max-height:calc(100vh - 96px); width:auto; height:auto;
+  object-fit:contain; border-radius:12px; }
+dialog.lightbox .close { position:absolute; top:12px; right:12px; width:auto; }
 input[type=file] { display:none; }
 .error { color: var(--error-color, #c00); }
 `;
@@ -168,7 +182,11 @@ class DomonapCabinetCard extends HTMLElement {
       </div>
       <input class="cam-in" type="file" accept="image/*" capture="user">
       <input class="gal-in" type="file" accept="image/*" multiple>
-      <div class="status"></div>`;
+      <div class="status"></div>
+      <dialog class="lightbox" aria-label="Просмотр фото">
+        <button type="button" class="close">Закрыть</button>
+        <img alt="Фото лица">
+      </dialog>`;
   }
   _bind() {
     const $ = (s) => this.shadowRoot.querySelector(s);
@@ -177,6 +195,12 @@ class DomonapCabinetCard extends HTMLElement {
       $(".gal").onclick = () => $(".gal-in").click();
       $(".cam-in").onchange = (e) => this._upload(e.target.files);
       $(".gal-in").onchange = (e) => this._upload(e.target.files);
+      const box = $(".lightbox");
+      const close = () => this._closeFacePreview();
+      $(".close").onclick = (ev) => { ev.stopPropagation(); close(); };
+      box.onclick = close;
+      box.querySelector("img").onclick = (ev) => ev.stopPropagation();
+      box.addEventListener("cancel", (ev) => { ev.preventDefault(); close(); });
       return;
     }
     $(".reply").onclick = () => this._send(false);
@@ -228,13 +252,50 @@ class DomonapCabinetCard extends HTMLElement {
       const id = f.imageId || "";
       const img = imgs.find((s) => (s.attributes.imageId || "") === id);
       const src = (img && img.attributes && img.attributes.entity_picture) || "";
-      const pic = src ? `<img src="${src}">` : `<div style="height:140px"></div>`;
-      return `<div class="face" data-id="${id}">${pic}<div class="cap"><span>${this._esc(f.faceName || "Фото")}</span>
-        <button class="sec del" data-id="${id}">Удалить</button></div></div>`;
+      const pic = src
+        ? `<img src="${this._esc(src)}" alt="">`
+        : `<div class="ph"></div>`;
+      return `<div class="face" data-id="${this._esc(id)}">
+        <button type="button" class="thumb" data-src="${this._esc(src)}" ${src ? "" : "disabled "}aria-label="Открыть фото">
+          ${pic}
+        </button>
+        <div class="cap">
+          <div class="uid" title="${this._esc(id)}">ID · ${this._esc(this._faceIdLabel(id))}</div>
+          <button type="button" class="sec del" data-id="${this._esc(id)}">Удалить</button>
+        </div>
+      </div>`;
     }).join("");
-    box.querySelectorAll(".del").forEach((btn) => {
-      btn.onclick = (ev) => { ev.stopPropagation(); this._deleteFace(btn.dataset.id); };
+    box.querySelectorAll(".thumb").forEach((btn) => {
+      btn.onclick = () => this._openFacePreview(btn.dataset.src);
     });
+    box.querySelectorAll(".del").forEach((btn) => {
+      btn.onclick = (ev) => { ev.stopPropagation(); this._closeFacePreview(); this._deleteFace(btn.dataset.id); };
+    });
+  }
+  _faceIdLabel(imageId) {
+    const id = String(imageId || "");
+    if (!id) return "—";
+    return id.length > 10 ? id.slice(-8) : id;
+  }
+  _openFacePreview(src) {
+    if (!src) return;
+    const box = this.shadowRoot.querySelector(".lightbox");
+    const img = box && box.querySelector("img");
+    if (!box || !img) return;
+    img.src = src;
+    if (typeof box.showModal === "function") {
+      if (!box.open) box.showModal();
+    } else {
+      box.setAttribute("open", "");
+    }
+  }
+  _closeFacePreview() {
+    const box = this.shadowRoot.querySelector(".lightbox");
+    if (!box) return;
+    if (typeof box.close === "function" && box.open) box.close();
+    else box.removeAttribute("open");
+    const img = box.querySelector("img");
+    if (img) img.removeAttribute("src");
   }
   async _openTicket(id) {
     this._selected = id;
