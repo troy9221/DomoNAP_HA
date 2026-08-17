@@ -7,9 +7,13 @@
 > **Разработчик оригинальной интеграции:** [svmironov/domonap_intercom](https://github.com/svmironov/domonap_intercom)  
 > **Данный репозиторий** — форк с дополнительными функциями и исправлениями: [troy9221/DomoNAP_HA](https://github.com/troy9221/DomoNAP_HA)
 
-Актуальная версия: **1.4.9**.
+Актуальная версия: **1.4.10**.
 
 ---
+
+## Что нового в 1.4.10
+
+Панель Domonap больше не ждёт JS-strategy при открытии — виды собираются на сервере. Это убирает частую ошибку `Timeout waiting for strategy element ll-strategy-dashboard-domonap`. После обновления перезапустите Home Assistant.
 
 ## Что нового в 1.4.9
 

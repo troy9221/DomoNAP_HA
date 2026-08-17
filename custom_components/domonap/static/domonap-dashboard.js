@@ -1,4 +1,37 @@
 (() => {
+  // Регистрируем тег сразу, пока грузится остальной файл. Иначе HA на
+  // strategy-дашборде падает: Timeout waiting for strategy element.
+  class DomonapDashboardStrategy extends HTMLElement {
+    static async generate(config, hass) {
+      const started = Date.now();
+      while (typeof window.__domonapDashboardGenerate !== "function") {
+        if (Date.now() - started > 8000) {
+          throw new Error("Domonap dashboard script is still loading");
+        }
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      return window.__domonapDashboardGenerate(config, hass);
+    }
+
+    static shouldRegenerate(config, oldHass, newHass) {
+      if (typeof window.__domonapDashboardShouldRegenerate === "function") {
+        return window.__domonapDashboardShouldRegenerate(config, oldHass, newHass);
+      }
+      return false;
+    }
+
+    static getCreateSuggestions(hass) {
+      if (typeof window.__domonapDashboardSuggestions === "function") {
+        return window.__domonapDashboardSuggestions(hass);
+      }
+      return { title: "Domonap", icon: "mdi:doorbell-video" };
+    }
+  }
+
+  ["ll-strategy-domonap", "ll-strategy-dashboard-domonap"].forEach((tag) => {
+    if (!customElements.get(tag)) customElements.define(tag, DomonapDashboardStrategy);
+  });
+
   function attr(state, key) {
     return state && state.attributes ? state.attributes[key] : undefined;
   }
@@ -449,7 +482,7 @@
       .join(",");
   }
 
-  class DomonapDashboardStrategy extends HTMLElement {
+  class DomonapDashboardGenerator {
     static async generate(_config, hass) {
       const data = collect(hass);
       const groups = groupBySite(data.buttons);
@@ -516,19 +549,17 @@
       views.push(cabinetView("Аватары", "face", "mdi:face-recognition", "face"));
       return { title: "Domonap", views };
     }
-
-    static shouldRegenerate(_config, oldHass, newHass) {
-      return doorSignature(oldHass) !== doorSignature(newHass);
-    }
-
-    static getCreateSuggestions(_hass) {
-      return { title: "Domonap", icon: "mdi:doorbell-video" };
-    }
   }
 
-  ["ll-strategy-domonap", "ll-strategy-dashboard-domonap"].forEach((tag) => {
-    if (!customElements.get(tag)) customElements.define(tag, DomonapDashboardStrategy);
+  window.__domonapDashboardGenerate = (config, hass) =>
+    DomonapDashboardGenerator.generate(config, hass);
+  window.__domonapDashboardShouldRegenerate = (config, oldHass, newHass) =>
+    doorSignature(oldHass) !== doorSignature(newHass);
+  window.__domonapDashboardSuggestions = () => ({
+    title: "Domonap",
+    icon: "mdi:doorbell-video",
   });
+
   window.customStrategies = window.customStrategies || [];
   if (!window.customStrategies.some((item) => item && item.type === "domonap")) {
     window.customStrategies.push({

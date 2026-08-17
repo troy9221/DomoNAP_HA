@@ -10,12 +10,12 @@ from homeassistant.exceptions import HomeAssistantError
 
 from .const import (
     DASHBOARD_SETUP_FLAG,
-    DASHBOARD_STRATEGY_TYPE,
     DASHBOARD_TITLE,
     DASHBOARD_URL_PATH,
     DOMAIN,
     is_domonap_dashboard_config,
 )
+from .dashboard_layout import generate_dashboard_config, layout_fingerprint
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -34,10 +34,6 @@ def _lovelace_data(hass: HomeAssistant):
         return hass.data.get(LOVELACE_DATA) or hass.data.get("lovelace")
     except Exception:
         return hass.data.get("lovelace")
-
-
-def _strategy_config() -> dict[str, Any]:
-    return {"strategy": {"type": DASHBOARD_STRATEGY_TYPE}}
 
 
 async def async_setup_dashboard(hass: HomeAssistant) -> None:
@@ -80,7 +76,7 @@ async def _ensure_storage_dashboard(hass: HomeAssistant) -> None:
             return
 
     await _ensure_dashboard_title(hass, lovelace_data)
-    await _ensure_strategy(existing)
+    await _ensure_dashboard_config(hass, existing)
 
 
 async def _create_dashboard_item(hass: HomeAssistant) -> dict[str, Any] | None:
@@ -281,7 +277,13 @@ def _attach_storage_dashboard(hass: HomeAssistant, lovelace_data, item: dict[str
     return store
 
 
-async def _ensure_strategy(store) -> None:
+async def _ensure_dashboard_config(hass: HomeAssistant, store) -> None:
+    """Сохранить обычные Lovelace-views вместо JS-strategy.
+
+    Strategy-дашборд ждёт custom element ``ll-strategy-dashboard-domonap``.
+    Если extra JS ещё не загрузился (Companion, медленная сеть, гонка при
+    старте), HA показывает Timeout waiting for strategy element.
+    """
     load = getattr(store, "async_load", None)
     save = getattr(store, "async_save", None)
     if not callable(save):
@@ -297,7 +299,9 @@ async def _ensure_strategy(store) -> None:
     if config and not is_domonap_dashboard_config(config):
         _LOGGER.debug("Leave existing dashboard /%s unchanged", DASHBOARD_URL_PATH)
         return
-    if is_domonap_dashboard_config(config):
+
+    generated = generate_dashboard_config(hass)
+    if layout_fingerprint(config) == layout_fingerprint(generated):
         return
-    await save(_strategy_config())
-    _LOGGER.info("Saved Domonap dashboard strategy on /%s", DASHBOARD_URL_PATH)
+    await save(generated)
+    _LOGGER.info("Saved Domonap dashboard views on /%s", DASHBOARD_URL_PATH)
