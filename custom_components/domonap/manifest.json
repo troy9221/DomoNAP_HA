@@ -8,5 +8,5 @@
   "config_flow": true,
   "dependencies": ["http"],
   "after_dependencies": ["frontend", "lovelace"],
-  "version": "1.4.9"
+  "version": "1.4.10"
 }

@@ -21,7 +21,7 @@ from .dashboard import async_setup_dashboard
 _LOGGER = logging.getLogger(__name__)
 
 _JS_FILES = ("domonap-card.js", "domonap-dashboard.js")
-_JS_VERSION = "1.4.9"
+_JS_VERSION = "1.4.10"
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 
@@ -135,9 +135,17 @@ async def _register_static(hass: HomeAssistant) -> None:
         from homeassistant.components.frontend import add_extra_js_url
 
         for name in _JS_FILES:
-            add_extra_js_url(hass, f"/domonap-static/{name}?v={_JS_VERSION}")
+            url = f"/domonap-static/{name}?v={_JS_VERSION}"
+            try:
+                add_extra_js_url(hass, url)
+            except TypeError:
+                add_extra_js_url(hass, url, False)
+            _LOGGER.debug("Registered extra JS %s", url)
     except Exception:
-        _LOGGER.debug("Could not add extra JS url", exc_info=True)
+        _LOGGER.warning("Could not add Domonap extra JS url", exc_info=True)
+        hass.bus.async_listen_once(
+            "homeassistant_started", lambda _event: hass.async_create_task(_register_static(hass))
+        )
 
 
 async def _register_lovelace_resource(hass: HomeAssistant) -> None:

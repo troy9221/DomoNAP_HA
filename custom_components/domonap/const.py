@@ -30,6 +30,7 @@ ACCOUNT_COORDINATOR = "account_coordinator"
 DASHBOARD_URL_PATH = "domonap-home"
 DASHBOARD_TITLE = "Domonap"
 DASHBOARD_STRATEGY_TYPE = "custom:domonap"
+DASHBOARD_GENERATED_KEY = "domonap_generated"
 DASHBOARD_SETUP_FLAG = "_dashboard_setup_scheduled"
 FACE_MAX_BYTES = 8 * 1024 * 1024
 
@@ -38,6 +39,8 @@ def is_domonap_dashboard_config(config: object) -> bool:
     """True, если Lovelace-конфиг — автодашборд интеграции."""
     if not isinstance(config, dict):
         return False
+    if config.get(DASHBOARD_GENERATED_KEY) is True:
+        return True
     strategy = config.get("strategy")
     if not isinstance(strategy, dict):
         return False

@@ -318,6 +318,9 @@ def test_domonap_dashboard_config_helper():
     assert const.is_domonap_dashboard_config(
         {"strategy": {"type": "custom:domonap"}}
     )
+    assert const.is_domonap_dashboard_config(
+        {"domonap_generated": True, "views": []}
+    )
     assert not const.is_domonap_dashboard_config({"views": []})
     assert not const.is_domonap_dashboard_config(None)
     assert const.FACE_MAX_BYTES == 8 * 1024 * 1024
@@ -326,10 +329,11 @@ def test_domonap_dashboard_config_helper():
 def test_dashboard_js_registers_official_strategy_tag():
     text = (
         ROOT / "custom_components" / "domonap" / "static" / "domonap-dashboard.js"
-    ).read_text()
+    ).read_text(encoding="utf-8")
     assert "ll-strategy-dashboard-domonap" in text
     assert "custom:domonap-cabinet-card" in text
     assert "window.customStrategies" in text
+    assert "__domonapDashboardGenerate" in text
     assert "iframe" not in text
     assert "9164270777" not in text
     assert "domofonPublicPin" in text
@@ -473,6 +477,89 @@ def test_dashboard_clean_name_strips_long_address():
     assert _dashboard_clean_name(
         "Калитка 1 (Паркинг : ул. Малое Понизовье, д.1А, п.1, э.1, место.122)"
     ) == "Калитка 1"
+
+
+def test_generate_dashboard_config_has_views_not_strategy():
+    import sys
+    import types
+
+    _install_homeassistant_stub()
+    cc = sys.modules.setdefault("custom_components", types.ModuleType("custom_components"))
+    cc.__path__ = [str(ROOT / "custom_components")]
+    pkg = sys.modules.setdefault(
+        "custom_components.domonap", types.ModuleType("custom_components.domonap")
+    )
+    pkg.__path__ = [str(ROOT / "custom_components" / "domonap")]
+    if "custom_components.domonap.const" not in sys.modules:
+        const = _load_module("custom_components.domonap.const", CONST_PATH)
+        pkg.const = const
+    layout = _load_module(
+        "custom_components.domonap.dashboard_layout",
+        ROOT / "custom_components" / "domonap" / "dashboard_layout.py",
+    )
+
+    class _State:
+        def __init__(self, entity_id, attributes):
+            self.entity_id = entity_id
+            self.attributes = attributes
+            self.state = "unknown"
+
+    class _Hass:
+        def __init__(self, items):
+            self.states = type("S", (), {"async_all": lambda self=None: items})()
+
+    buttons = [
+        _State(
+            "button.lift_open_door",
+            {
+                "doorId": "d1",
+                "name": "Лифтовой холл 14 эт",
+                "addressString": "улица Малое Понизовье, д.3, п.5, э.14, кв.264",
+            },
+        ),
+        _State(
+            "button.podval_open_door",
+            {
+                "doorId": "d2",
+                "name": "Вход в подвал",
+                "addressString": "улица Малое Понизовье, д.3, п.5, э.-1, кладовка.140",
+            },
+        ),
+        _State(
+            "button.podval_open_door_2",
+            {
+                "doorId": "d3",
+                "name": "Вход в подвал",
+                "addressString": "улица Малое Понизовье, д.3, п.5, э.-1, кладовка.140",
+            },
+        ),
+        _State(
+            "button.vyezd_open_door",
+            {
+                "doorId": "d4",
+                "name": "Выезд",
+                "addressString": "Паркинг : ул. Малое Понизовье, д.1А, п.1, э.1, место.122",
+            },
+        ),
+    ]
+    config = layout.generate_dashboard_config(_Hass(buttons))
+    assert config["domonap_generated"] is True
+    assert "strategy" not in config
+    titles = [view["title"] for view in config["views"] if view.get("path") not in ("support", "face")]
+    assert titles[0].startswith("Малое Понизовье")
+    assert any(title.startswith("Паркинг") for title in titles)
+    assert any(title.startswith("Кладовки") for title in titles)
+    assert titles.index(next(t for t in titles if t.startswith("Паркинг"))) > titles.index(
+        next(t for t in titles if not t.startswith("Паркинг") and not t.startswith("Кладовки"))
+    )
+    storage = next(view for view in config["views"] if str(view.get("title", "")).startswith("Кладовки"))
+    names = []
+    for card in storage["cards"]:
+        for entity in card.get("entities") or []:
+            if isinstance(entity, dict) and entity.get("name"):
+                names.append(entity["name"])
+    assert names == ["Вход в подвал 1", "Вход в подвал 2"]
+
 
 
 
@@ -657,14 +744,14 @@ def test_lovelace_resource_query_is_updated_on_version_bump():
         {"id": "r2", "url": "/domonap-static/domonap-dashboard.js?v=1.4.4"},
     ]
     wanted = [
-        "/domonap-static/domonap-card.js?v=1.4.9",
-        "/domonap-static/domonap-dashboard.js?v=1.4.9",
+        "/domonap-static/domonap-card.js?v=1.4.10",
+        "/domonap-static/domonap-dashboard.js?v=1.4.10",
     ]
     to_create, to_update = const.planned_lovelace_resource_changes(items, wanted)
     assert to_create == []
     assert to_update == [
-        ("r1", "/domonap-static/domonap-card.js?v=1.4.9"),
-        ("r2", "/domonap-static/domonap-dashboard.js?v=1.4.9"),
+        ("r1", "/domonap-static/domonap-card.js?v=1.4.10"),
+        ("r2", "/domonap-static/domonap-dashboard.js?v=1.4.10"),
     ]
     to_create, to_update = const.planned_lovelace_resource_changes([], wanted)
     assert to_create == wanted
